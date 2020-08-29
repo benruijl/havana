@@ -1,0 +1,14 @@
+[package]
+authors = ["Ben Ruijl <benruyl@gmail.com>"]
+description = "A Monte Carlo integrator that can handle nested discrete and continuous grids"
+edition = "2018"
+name = "havana"
+repository = "https://github.com/benruijl/havana"
+version = "0.1.0"
+
+[features]
+gridplotting = ["plotters"]
+
+[dependencies]
+plotters = {version = "0.2.15", optional = true}
+rand = "0.7.3"
