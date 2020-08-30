@@ -92,44 +92,72 @@ impl AverageAndErrorAccumulator {
     }
 }
 #[derive(Debug, Clone)]
-pub enum OwnedSample {
+pub enum Sample {
     ContinuousGrid(f64, Vec<f64>),
-    DiscreteGrid(f64, Vec<usize>, Option<Box<OwnedSample>>),
+    DiscreteGrid(f64, Vec<usize>, Option<Box<Sample>>),
     MultiChannel(f64, usize, Vec<f64>), // sample point and weights
 }
 
-impl OwnedSample {
-    pub fn new() -> OwnedSample {
-        OwnedSample::ContinuousGrid(0., vec![])
+impl Sample {
+    pub fn new() -> Sample {
+        Sample::ContinuousGrid(0., vec![])
     }
 
     pub fn get_weight(&self) -> f64 {
         match self {
-            OwnedSample::ContinuousGrid(w, _)
-            | OwnedSample::DiscreteGrid(w, _, _)
-            | OwnedSample::MultiChannel(w, _, _) => *w,
+            Sample::ContinuousGrid(w, _)
+            | Sample::DiscreteGrid(w, _, _)
+            | Sample::MultiChannel(w, _, _) => *w,
         }
     }
 
     pub fn to_discrete_grid(&mut self) -> &mut Self {
         match self {
-            OwnedSample::DiscreteGrid(..) => {}
-            _ => *self = OwnedSample::DiscreteGrid(0., vec![], None),
+            Sample::DiscreteGrid(..) => {}
+            _ => *self = Sample::DiscreteGrid(0., vec![], None),
         }
         self
     }
 
     pub fn to_continuous_grid(&mut self) -> &mut Self {
         match self {
-            OwnedSample::ContinuousGrid(..) => {}
-            OwnedSample::MultiChannel(_w, _c, xs) => {
+            Sample::ContinuousGrid(..) => {}
+            Sample::MultiChannel(_w, _c, xs) => {
                 let mut x = std::mem::take(xs);
                 x.clear();
-                *self = OwnedSample::ContinuousGrid(0., x);
+                *self = Sample::ContinuousGrid(0., x);
             }
-            OwnedSample::DiscreteGrid(..) => *self = OwnedSample::ContinuousGrid(0., vec![]),
+            Sample::DiscreteGrid(..) => *self = Sample::ContinuousGrid(0., vec![]),
         }
         self
+    }
+}
+#[derive(Debug, Clone)]
+pub enum Grid {
+    ContinuousGrid(ContinuousGrid),
+    DiscreteGrid(DiscreteGrid),
+}
+
+impl Grid {
+    pub fn sample<R: Rng + ?Sized>(&mut self, rng: &mut R, sample: &mut Sample) {
+        match self {
+            Grid::ContinuousGrid(g) => g.sample(rng, sample),
+            Grid::DiscreteGrid(g) => g.sample(rng, sample),
+        }
+    }
+
+    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64, train_on_avg: bool) {
+        match self {
+            Grid::ContinuousGrid(g) => g.add_training_sample(sample, fx, train_on_avg),
+            Grid::DiscreteGrid(g) => g.add_training_sample(sample, fx, train_on_avg),
+        }
+    }
+
+    pub fn update<'a>(&mut self, alpha: f64, new_bin_length: usize) {
+        match self {
+            Grid::ContinuousGrid(g) => g.update(alpha, new_bin_length),
+            Grid::DiscreteGrid(g) => g.update(alpha, new_bin_length),
+        }
     }
 }
 
@@ -141,6 +169,7 @@ pub struct ContinuousDimension {
     counter: Vec<usize>,
 }
 
+#[derive(Debug, Clone)]
 pub struct DiscreteDimension {
     pub cdf: Vec<f64>,
     bin_importance: Vec<f64>,
@@ -215,14 +244,15 @@ impl DiscreteDimension {
 }
 
 // TODO: support a mix of continuous dimensions and discrete dimensions?
+#[derive(Debug, Clone)]
 pub struct DiscreteGrid {
     pub discrete_dimensions: Vec<DiscreteDimension>,
-    pub child_grids: Vec<ContinuousGrid>, // TODO: make into a trait
+    pub child_grids: Vec<Grid>,
     accumulator: AverageAndErrorAccumulator,
 }
 
 impl DiscreteGrid {
-    pub fn new(values_per_dim: &[usize], child_grids: Vec<ContinuousGrid>) -> DiscreteGrid {
+    pub fn new(values_per_dim: &[usize], child_grids: Vec<Grid>) -> DiscreteGrid {
         DiscreteGrid {
             discrete_dimensions: values_per_dim
                 .iter()
@@ -233,8 +263,8 @@ impl DiscreteGrid {
         }
     }
 
-    pub fn sample<R: Rng + ?Sized>(&mut self, rng: &mut R, sample: &mut OwnedSample) {
-        if let OwnedSample::DiscreteGrid(weight, vs, child) = sample.to_discrete_grid() {
+    pub fn sample<R: Rng + ?Sized>(&mut self, rng: &mut R, sample: &mut Sample) {
+        if let Sample::DiscreteGrid(weight, vs, child) = sample.to_discrete_grid() {
             *weight = 1.;
 
             vs.clear();
@@ -257,19 +287,16 @@ impl DiscreteGrid {
             // get the child grid for this sample
             if child_index < self.child_grids.len() {
                 let child_sample = if let Some(child_sample) = child {
-                    child_sample.to_continuous_grid();
                     child_sample
                 } else {
-                    *child = Some(Box::new(OwnedSample::ContinuousGrid(0., vec![])));
+                    *child = Some(Box::new(Sample::new()));
                     child.as_mut().unwrap()
                 };
 
                 self.child_grids[child_index].sample(rng, child_sample);
 
-                // should we multiply the weight of the subsample?
-                if let OwnedSample::ContinuousGrid(w, _) = &**child_sample {
-                    *weight *= w;
-                }
+                // multiply the weight of the subsample
+                *weight *= child_sample.get_weight();
             } else {
                 *child = None;
             };
@@ -278,8 +305,8 @@ impl DiscreteGrid {
         }
     }
 
-    pub fn add_training_sample(&mut self, sample: &OwnedSample, fx: f64, train_on_avg: bool) {
-        if let OwnedSample::DiscreteGrid(weight, xs, cont_sample) = sample {
+    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64, train_on_avg: bool) {
+        if let Sample::DiscreteGrid(weight, xs, cont_sample) = sample {
             let mut child_index = 0;
             for (d, sdim) in self.discrete_dimensions.iter_mut().zip(xs) {
                 child_index += *sdim; // (*sdim as f64 * d.cdf.len() as f64) as usize;
@@ -290,8 +317,6 @@ impl DiscreteGrid {
                 self.child_grids[child_index].add_training_sample(&*s, fx, train_on_avg);
             }
 
-            // FIXME: do we need to include the sub-jacobian too?
-            // this will not give the value of the integrand
             self.accumulator.add_sample(fx * weight);
         } else {
             unreachable!()
@@ -315,6 +340,7 @@ impl DiscreteGrid {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ContinuousGrid {
     pub continuous_dimensions: Vec<ContinuousDimension>,
     accumulator: AverageAndErrorAccumulator,
@@ -328,8 +354,8 @@ impl ContinuousGrid {
         }
     }
 
-    pub fn sample<R: Rng + ?Sized>(&mut self, rng: &mut R, sample: &mut OwnedSample) {
-        if let OwnedSample::ContinuousGrid(weight, vs) = sample.to_continuous_grid() {
+    pub fn sample<R: Rng + ?Sized>(&mut self, rng: &mut R, sample: &mut Sample) {
+        if let Sample::ContinuousGrid(weight, vs) = sample.to_continuous_grid() {
             *weight = 1.;
             vs.clear();
             vs.resize(self.continuous_dimensions.len(), 0.);
@@ -343,8 +369,8 @@ impl ContinuousGrid {
         }
     }
 
-    pub fn add_training_sample(&mut self, sample: &OwnedSample, fx: f64, train_on_avg: bool) {
-        if let OwnedSample::ContinuousGrid(weight, xs) = sample {
+    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64, train_on_avg: bool) {
+        if let Sample::ContinuousGrid(weight, xs) = sample {
             self.accumulator.add_sample(fx * weight);
 
             for (d, sdim) in self.continuous_dimensions.iter_mut().zip(xs) {

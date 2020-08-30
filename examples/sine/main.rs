@@ -1,4 +1,4 @@
-use havana::{AverageAndErrorAccumulator, ContinuousGrid, OwnedSample};
+use havana::{AverageAndErrorAccumulator, ContinuousGrid, Sample};
 
 fn main() {
     let f = |x: f64| (x * std::f64::consts::PI).sin();
@@ -10,10 +10,10 @@ fn main() {
 
     for _ in 1..20 {
         for _ in 0..10000 {
-            let mut sample = OwnedSample::ContinuousGrid(0., vec![]);
+            let mut sample = Sample::ContinuousGrid(0., vec![]);
 
             grid.sample(&mut rng, &mut sample);
-            if let OwnedSample::ContinuousGrid(cont_weight, cs) = &sample {
+            if let Sample::ContinuousGrid(cont_weight, cs) = &sample {
                 let res = f(cs[0]);
                 grid.add_training_sample(&sample, res, false);
                 integral.add_sample(res * cont_weight);

@@ -1,4 +1,4 @@
-use havana::{AverageAndErrorAccumulator, ContinuousGrid, DiscreteGrid, OwnedSample};
+use havana::{AverageAndErrorAccumulator, ContinuousGrid, DiscreteGrid, Grid, Sample};
 
 fn main() {
     let f = |x: f64| (x * std::f64::consts::PI).sin();
@@ -6,22 +6,23 @@ fn main() {
 
     let mut disc_grid = DiscreteGrid::new(
         &[2],
-        vec![ContinuousGrid::new(1, 10), ContinuousGrid::new(1, 10)],
+        vec![
+            Grid::ContinuousGrid(ContinuousGrid::new(1, 10)),
+            Grid::ContinuousGrid(ContinuousGrid::new(1, 10)),
+        ],
     );
 
     let mut rng = rand::thread_rng();
 
     let mut integral = AverageAndErrorAccumulator::new();
-    let mut samples = vec![OwnedSample::new(); 10000];
+    let mut samples = vec![Sample::new(); 10000];
 
     for _ in 1..20 {
         for si in 0..10000 {
             disc_grid.sample(&mut rng, &mut samples[si]);
 
-            if let OwnedSample::DiscreteGrid(weight, xs, cont_sample) = &samples[si] {
-                if let OwnedSample::ContinuousGrid(_cont_weight, cs) =
-                    &**cont_sample.as_ref().unwrap()
-                {
+            if let Sample::DiscreteGrid(weight, xs, cont_sample) = &samples[si] {
+                if let Sample::ContinuousGrid(_cont_weight, cs) = &**cont_sample.as_ref().unwrap() {
                     let res = if xs[0] == 0 { f(cs[0]) } else { f1(cs[0]) };
                     disc_grid.add_training_sample(&samples[si], res, true);
                     integral.add_sample(res * weight);
