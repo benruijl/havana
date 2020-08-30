@@ -1,7 +1,7 @@
 use havana::{AverageAndErrorAccumulator, DiscreteGrid, OwnedSample};
 
 fn main() {
-    let mut disc_grid = DiscreteGrid::new(&[2], vec![]);
+    let mut disc_grid = DiscreteGrid::new(&[5], vec![]);
 
     let mut rng = rand::thread_rng();
 

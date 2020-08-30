@@ -103,6 +103,14 @@ impl OwnedSample {
         OwnedSample::ContinuousGrid(0., vec![])
     }
 
+    pub fn get_weight(&self) -> f64 {
+        match self {
+            OwnedSample::ContinuousGrid(w, _)
+            | OwnedSample::DiscreteGrid(w, _, _)
+            | OwnedSample::MultiChannel(w, _, _) => *w,
+        }
+    }
+
     pub fn to_discrete_grid(&mut self) -> &mut Self {
         match self {
             OwnedSample::DiscreteGrid(..) => {}
