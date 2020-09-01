@@ -2,7 +2,7 @@ use havana::{AverageAndErrorAccumulator, ContinuousGrid, Sample};
 
 fn main() {
     let f = |x: f64| (x * std::f64::consts::PI).sin();
-    let mut grid = ContinuousGrid::new(1, 10);
+    let mut grid = ContinuousGrid::new(1, 10, 1000);
 
     let mut rng = rand::thread_rng();
 

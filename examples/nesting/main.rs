@@ -7,9 +7,10 @@ fn main() {
     let mut disc_grid = DiscreteGrid::new(
         &[2],
         vec![
-            Grid::ContinuousGrid(ContinuousGrid::new(1, 10)),
-            Grid::ContinuousGrid(ContinuousGrid::new(1, 10)),
+            Grid::ContinuousGrid(ContinuousGrid::new(1, 10, 1000)),
+            Grid::ContinuousGrid(ContinuousGrid::new(1, 10, 1000)),
         ],
+        0.01,
     );
 
     let mut rng = rand::thread_rng();
@@ -43,10 +44,10 @@ fn main() {
 
     #[cfg(feature = "gridplotting")]
     disc_grid.child_grids[0].continuous_dimensions[0]
-        .plot(&f, "grid_disc1.svg")
+        .plot(&f, "grid_nest_disc1.svg")
         .unwrap();
     #[cfg(feature = "gridplotting")]
     disc_grid.child_grids[1].continuous_dimensions[0]
-        .plot(&f1, "grid_disc2.svg")
+        .plot(&f1, "grid_nest_disc2.svg")
         .unwrap();
 }

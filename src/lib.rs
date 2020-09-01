@@ -162,26 +162,20 @@ impl Grid {
 }
 
 #[derive(Debug, Clone)]
-pub struct ContinuousDimension {
-    pub partitioning: Vec<f64>,
-    pub new_partitioning: Vec<f64>,
-    bin_importance: Vec<f64>,
-    counter: Vec<usize>,
-}
-
-#[derive(Debug, Clone)]
 pub struct DiscreteDimension {
     pub cdf: Vec<f64>,
     bin_importance: Vec<f64>,
     counter: Vec<usize>,
+    min_probability_per_bin: f64,
 }
 
 impl DiscreteDimension {
-    pub fn new(n_values: usize) -> DiscreteDimension {
+    pub fn new(n_values: usize, min_probability_per_bin: f64) -> DiscreteDimension {
         DiscreteDimension {
             cdf: (1..=n_values).map(|i| i as f64 / n_values as f64).collect(),
             bin_importance: vec![0.; n_values],
             counter: vec![0; n_values],
+            min_probability_per_bin,
         }
     }
 
@@ -227,19 +221,59 @@ impl DiscreteDimension {
             }
         }
 
+        // TODO: factor in previous cdf
         let mut accum = 0.;
         for (c, &a) in self.cdf.iter_mut().zip(&self.bin_importance) {
-            accum += a / sum;
+            accum += a / sum * (1. - self.min_probability_per_bin)
+                + self.min_probability_per_bin / self.bin_importance.len() as f64;
             *c = accum;
         }
 
-        //dbg!(&self.cdf);
-
-        // TODO: make sure we sample each bin at least a few times
         self.counter.clear();
         self.counter.resize(self.cdf.len(), 0);
         self.bin_importance.clear();
         self.bin_importance.resize(self.cdf.len(), 0.);
+    }
+
+    #[cfg(feature = "gridplotting")]
+    pub fn plot(&self, filename: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let max_prob = self
+            .cdf
+            .iter()
+            .fold((0.0f64, 0.0f64), |(last, max), x| (*x, max.max(x - last)))
+            .1;
+
+        let root = SVGBackend::new(filename, (640 * (self.cdf.len() as u32 / 10), 640))
+            .into_drawing_area();
+        root.fill(&WHITE)?;
+        let root = root.margin(10, 10, 10, 10);
+        let mut chart = ChartBuilder::on(&root)
+            .x_label_area_size(40)
+            .y_label_area_size(40)
+            .build_ranged(0u32..(self.cdf.len() as u32), 0f32..max_prob as f32)?;
+
+        chart
+            .configure_mesh()
+            .disable_x_mesh()
+            .line_style_1(&WHITE.mix(0.3))
+            .x_labels(self.cdf.len())
+            .y_labels(10)
+            .draw()?;
+
+        let mut bottom = 0.;
+        chart
+            .draw_series(
+                plotters::series::Histogram::vertical(&chart)
+                    .style(RED.mix(0.8).filled())
+                    .data(self.cdf.iter().enumerate().map(|(i, x)| {
+                        let r = (i as u32, (*x - bottom) as f32);
+                        bottom = *x;
+                        r
+                    })),
+            )
+            .unwrap();
+
+        Ok(())
     }
 }
 
@@ -252,11 +286,15 @@ pub struct DiscreteGrid {
 }
 
 impl DiscreteGrid {
-    pub fn new(values_per_dim: &[usize], child_grids: Vec<Grid>) -> DiscreteGrid {
+    pub fn new(
+        values_per_dim: &[usize],
+        child_grids: Vec<Grid>,
+        minimum_probability: f64,
+    ) -> DiscreteGrid {
         DiscreteGrid {
             discrete_dimensions: values_per_dim
                 .iter()
-                .map(|i| DiscreteDimension::new(*i))
+                .map(|i| DiscreteDimension::new(*i, minimum_probability))
                 .collect(),
             child_grids,
             accumulator: AverageAndErrorAccumulator::new(),
@@ -347,9 +385,12 @@ pub struct ContinuousGrid {
 }
 
 impl ContinuousGrid {
-    pub fn new(n_dims: usize, n_bins: usize) -> ContinuousGrid {
+    pub fn new(n_dims: usize, n_bins: usize, min_samples_for_update: usize) -> ContinuousGrid {
         ContinuousGrid {
-            continuous_dimensions: vec![ContinuousDimension::new(n_bins); n_dims],
+            continuous_dimensions: vec![
+                ContinuousDimension::new(n_bins, min_samples_for_update);
+                n_dims
+            ],
             accumulator: AverageAndErrorAccumulator::new(),
         }
     }
@@ -394,13 +435,23 @@ impl ContinuousGrid {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ContinuousDimension {
+    pub partitioning: Vec<f64>,
+    pub new_partitioning: Vec<f64>,
+    bin_importance: Vec<f64>,
+    counter: Vec<usize>,
+    min_samples_for_update: usize,
+}
+
 impl ContinuousDimension {
-    pub fn new(n_bins: usize) -> ContinuousDimension {
+    pub fn new(n_bins: usize, min_samples_for_update: usize) -> ContinuousDimension {
         ContinuousDimension {
             partitioning: (0..=n_bins).map(|i| i as f64 / n_bins as f64).collect(),
             new_partitioning: vec![],
             bin_importance: vec![0.; n_bins],
             counter: vec![0; n_bins],
+            min_samples_for_update,
         }
     }
 
@@ -439,6 +490,19 @@ impl ContinuousDimension {
     }
 
     fn update<'a>(&mut self, alpha: f64, new_bin_length: usize) {
+        if self.counter.iter().sum::<usize>() < self.min_samples_for_update {
+            // do not train the grid if there is a lack of samples
+            return;
+        }
+
+        if alpha == 0. {
+            self.bin_importance.clear();
+            self.bin_importance.resize(self.partitioning.len() - 1, 0.);
+            self.counter.clear();
+            self.counter.resize(self.partitioning.len() - 1, 0);
+            return;
+        }
+
         let n_bins = self.partitioning.len() - 1;
 
         //dbg!(&self.bin_importance, &self.counter);
