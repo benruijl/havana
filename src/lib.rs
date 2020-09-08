@@ -1,6 +1,8 @@
 #[cfg(feature = "gridplotting")]
 use plotters::prelude::*;
 use rand::Rng;
+#[cfg(feature = "use_serde")]
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Clone)]
 pub struct AverageAndErrorAccumulator {
@@ -15,7 +17,7 @@ pub struct AverageAndErrorAccumulator {
     chi_sum: f64,
     chi_sq_sum: f64,
     num_samples: usize,
-    cur_iter: usize,
+    pub cur_iter: usize,
 }
 
 impl AverageAndErrorAccumulator {
@@ -91,7 +93,9 @@ impl AverageAndErrorAccumulator {
         self.cur_iter += 1;
     }
 }
+
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
 pub enum Sample {
     ContinuousGrid(f64, Vec<f64>),
     DiscreteGrid(f64, Vec<usize>, Option<Box<Sample>>),
@@ -189,7 +193,7 @@ impl DiscreteDimension {
             }
             bottom = *v;
         }
-        unreachable!();
+        unreachable!("Could not sample discrete dimension: {:?}", self.cdf);
     }
 
     fn add_training_sample(&mut self, sample: usize, weight: f64, fx: f64, train_on_avg: bool) {
@@ -208,7 +212,11 @@ impl DiscreteDimension {
         self.counter[sample] += 1;
     }
 
-    fn update<'a>(&mut self) {
+    fn update<'a>(&mut self, _alpha: f64) {
+        if self.bin_importance.iter().all(|x| *x == 0.) {
+            return;
+        }
+
         for avg in self.bin_importance.iter_mut() {
             *avg = avg.abs();
         }
@@ -339,31 +347,31 @@ impl DiscreteGrid {
                 *child = None;
             };
         } else {
-            unreachable!()
+            unreachable!("Sample cannot be converted to discrete sample: {:?}", self);
         }
     }
 
     pub fn add_training_sample(&mut self, sample: &Sample, fx: f64, train_on_avg: bool) {
-        if let Sample::DiscreteGrid(weight, xs, cont_sample) = sample {
+        if let Sample::DiscreteGrid(weight, xs, sub_sample) = sample {
             let mut child_index = 0;
             for (d, sdim) in self.discrete_dimensions.iter_mut().zip(xs) {
                 child_index += *sdim; // (*sdim as f64 * d.cdf.len() as f64) as usize;
                 d.add_training_sample(*sdim, *weight, fx, train_on_avg)
             }
 
-            if let Some(s) = cont_sample {
+            if let Some(s) = sub_sample {
                 self.child_grids[child_index].add_training_sample(&*s, fx, train_on_avg);
             }
 
             self.accumulator.add_sample(fx * weight);
         } else {
-            unreachable!()
+            unreachable!("Sample cannot be converted to discrete sample: {:?}", self);
         }
     }
 
     pub fn update(&mut self, alpha: f64, new_bin_length: usize) {
         for d in self.discrete_dimensions.iter_mut() {
-            d.update();
+            d.update(alpha);
         }
 
         for d in self.child_grids.iter_mut() {
@@ -406,7 +414,10 @@ impl ContinuousGrid {
                 *vs = v;
             }
         } else {
-            unreachable!()
+            unreachable!(
+                "Sample cannot be converted to continuous sample: {:?}",
+                self
+            );
         }
     }
 
@@ -418,7 +429,10 @@ impl ContinuousGrid {
                 d.add_training_sample(*sdim, *weight, fx, train_on_avg)
             }
         } else {
-            unreachable!()
+            unreachable!(
+                "Sample cannot be converted to continuous sample: {:?}",
+                self
+            );
         }
     }
 
