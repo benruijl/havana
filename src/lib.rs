@@ -212,35 +212,36 @@ impl DiscreteDimension {
         self.counter[sample] += 1;
     }
 
-    fn update<'a>(&mut self, _alpha: f64) {
-        if self.bin_importance.iter().all(|x| *x == 0.) {
+    fn update<'a>(&mut self, alpha: f64) {
+        if alpha == 0. || self.bin_importance.iter().all(|x| *x == 0.) {
             return;
         }
 
-        for avg in self.bin_importance.iter_mut() {
-            *avg = avg.abs();
-        }
-
+        // the bin importance is accumulated over all updates and is never reset
         let mut sum = 0.;
-        for (avg, &c) in self.bin_importance.iter_mut().zip(&self.counter) {
-            if c > 0 {
-                *avg /= c as f64;
-                sum += *avg;
+        for ((c, &bi), &co) in self
+            .cdf
+            .iter_mut()
+            .zip(&self.bin_importance)
+            .zip(&self.counter)
+        {
+            if co > 0 {
+                *c = bi.abs() / co as f64;
+                sum += *c;
             }
         }
 
-        // TODO: factor in previous cdf
-        let mut accum = 0.;
-        for (c, &a) in self.cdf.iter_mut().zip(&self.bin_importance) {
-            accum += a / sum * (1. - self.min_probability_per_bin)
+        for c in self.cdf.iter_mut() {
+            *c = *c / sum * (1. - self.min_probability_per_bin)
                 + self.min_probability_per_bin / self.bin_importance.len() as f64;
-            *c = accum;
         }
 
-        self.counter.clear();
-        self.counter.resize(self.cdf.len(), 0);
-        self.bin_importance.clear();
-        self.bin_importance.resize(self.cdf.len(), 0.);
+        // now do the cdf
+        let mut last = 0.;
+        for c in self.cdf.iter_mut() {
+            *c = *c + last;
+            last = *c;
+        }
     }
 
     #[cfg(feature = "gridplotting")]
@@ -251,14 +252,13 @@ impl DiscreteDimension {
             .fold((0.0f64, 0.0f64), |(last, max), x| (*x, max.max(x - last)))
             .1;
 
-        let root = SVGBackend::new(filename, (640 * (self.cdf.len() as u32 / 10), 640))
-            .into_drawing_area();
+        let root = SVGBackend::new(filename, (64 * self.cdf.len() as u32, 640)).into_drawing_area();
         root.fill(&WHITE)?;
         let root = root.margin(10, 10, 10, 10);
         let mut chart = ChartBuilder::on(&root)
             .x_label_area_size(40)
             .y_label_area_size(40)
-            .build_ranged(0u32..(self.cdf.len() as u32), 0f32..max_prob as f32)?;
+            .build_ranged(0u32..self.cdf.len() as u32, 0f32..max_prob as f32)?;
 
         chart
             .configure_mesh()
