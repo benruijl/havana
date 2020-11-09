@@ -197,6 +197,14 @@ impl DiscreteDimension {
     }
 
     fn add_training_sample(&mut self, sample: usize, weight: f64, fx: f64, train_on_avg: bool) {
+        if sample >= self.cdf.len() {
+            panic!(
+                "Sample outside of range: sample={}, range=[0,{})",
+                sample,
+                self.cdf.len()
+            );
+        }
+
         let prob = if sample > 0 {
             self.cdf[sample] - self.cdf[sample - 1]
         } else {
@@ -232,8 +240,12 @@ impl DiscreteDimension {
         }
 
         for c in self.cdf.iter_mut() {
-            *c = *c / sum * (1. - self.min_probability_per_bin)
-                + self.min_probability_per_bin / self.bin_importance.len() as f64;
+            if sum == 0. {
+                *c = 1. / self.bin_importance.len() as f64;
+            } else {
+                *c = *c / sum * (1. - self.min_probability_per_bin)
+                    + self.min_probability_per_bin / self.bin_importance.len() as f64;
+            }
         }
 
         // now do the cdf
@@ -352,6 +364,13 @@ impl DiscreteGrid {
     }
 
     pub fn add_training_sample(&mut self, sample: &Sample, fx: f64, train_on_avg: bool) {
+        if !fx.is_finite() {
+            panic!(
+                "Added training sample that is not finite: sample={:?}, fx={}",
+                sample, fx
+            );
+        }
+
         if let Sample::DiscreteGrid(weight, xs, sub_sample) = sample {
             let mut child_index = 0;
             for (d, sdim) in self.discrete_dimensions.iter_mut().zip(xs) {
@@ -422,6 +441,13 @@ impl ContinuousGrid {
     }
 
     pub fn add_training_sample(&mut self, sample: &Sample, fx: f64, train_on_avg: bool) {
+        if !fx.is_finite() {
+            panic!(
+                "Added training sample that is not finite: sample={:?}, fx={}",
+                sample, fx
+            );
+        }
+
         if let Sample::ContinuousGrid(weight, xs) = sample {
             self.accumulator.add_sample(fx * weight);
 
@@ -486,6 +512,13 @@ impl ContinuousDimension {
     }
 
     fn add_training_sample(&mut self, sample: f64, weight: f64, fx: f64, train_on_avg: bool) {
+        if sample < 0. || sample > 1. || !fx.is_finite() || !weight.is_finite() {
+            panic!(
+                "Malformed sample point: sample={}, weight={}, fx={}",
+                sample, weight, fx
+            );
+        }
+
         let mut index = self
             .partitioning
             .binary_search_by(|v| v.partial_cmp(&sample).unwrap())
@@ -548,22 +581,19 @@ impl ContinuousDimension {
             self.bin_importance[n_bins - 1] = (prev + 3. * cur) / 4.;
         }
 
-        // our sum is positive definite, so it's only zero when everything is 0
         let sum: f64 = self.bin_importance.iter().sum();
         let mut impsum = 0.;
         for bi in self.bin_importance.iter_mut() {
-            let m = if *bi == 0. {
-                0.
-            } else if *bi == sum {
+            let m = if *bi == sum {
                 1.
+            } else if *bi == 0. {
+                0.
             } else {
                 ((*bi / sum - 1.) / (*bi / sum).ln()).powf(alpha)
             };
             *bi = m;
             impsum += m;
         }
-
-        //dbg!(&self.bin_importance);
 
         let new_weight_per_bin = impsum / new_bin_length as f64;
         //dbg!(new_weight_per_bin);
