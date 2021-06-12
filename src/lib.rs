@@ -58,6 +58,29 @@ impl AverageAndErrorAccumulator {
         }
     }
 
+    pub fn shallow_copy(&self) -> AverageAndErrorAccumulator {
+        AverageAndErrorAccumulator {
+            sum: self.sum,
+            sum_sq: self.sum_sq,
+            weight_sum: self.weight_sum,
+            avg_sum: self.avg_sum,
+            avg: self.avg,
+            err: self.err,
+            guess: self.guess,
+            chi_sq: self.chi_sq,
+            chi_sum: self.sum,
+            chi_sq_sum: self.chi_sq_sum,
+            num_samples: self.num_samples,
+            cur_iter: self.cur_iter,
+            total_samples: self.total_samples,
+            max_eval_positive: self.max_eval_positive,
+            max_eval_positive_xs: None,
+            max_eval_negative: self.max_eval_negative,
+            max_eval_negative_xs: None,
+            num_zero_evals: self.num_zero_evals,
+        }
+    }
+
     pub fn add_sample(&mut self, integrand: f64, sample: &Sample) {
         self.sum += integrand;
         self.sum_sq += integrand * integrand;

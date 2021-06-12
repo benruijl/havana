@@ -229,6 +229,21 @@ impl HavanaWrapper {
                 .collect::<Vec<_>>()),
         }
     }
+
+    fn get_current_estimate(&self) -> PyResult<(f64, f64, f64)> {
+        match &self.grid {
+            Grid::ContinuousGrid(cs) => {
+                let mut a = cs.accumulator.shallow_copy();
+                a.update_iter();
+                Ok((a.avg, a.err, a.chi_sq))
+            }
+            Grid::DiscreteGrid(ds) => {
+                let mut a = ds.accumulator.shallow_copy();
+                a.update_iter();
+                Ok((a.avg, a.err, a.chi_sq))
+            }
+        }
+    }
 }
 
 #[pymodule]
