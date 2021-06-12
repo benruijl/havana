@@ -7,7 +7,7 @@ use tinymt::{TinyMT64, TinyMT64Seed};
 pub struct HavanaWrapper {
     pub grid: Grid,
     rng: TinyMT64,
-    samples: Vec<Sample>,
+    pub samples: Vec<Sample>,
 }
 
 #[pyclass(name = "Sample")]

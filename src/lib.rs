@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
 
 #[cfg(feature = "python_bindings")]
-mod bindings;
+pub mod bindings;
 
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(
@@ -401,7 +401,7 @@ impl DiscreteDimension {
 pub struct DiscreteGrid {
     pub discrete_dimensions: Vec<DiscreteDimension>,
     pub child_grids: Vec<Grid>,
-    accumulator: AverageAndErrorAccumulator,
+    pub accumulator: AverageAndErrorAccumulator,
 }
 
 impl DiscreteGrid {
@@ -533,7 +533,7 @@ impl DiscreteGrid {
 )]
 pub struct ContinuousGrid {
     pub continuous_dimensions: Vec<ContinuousDimension>,
-    accumulator: AverageAndErrorAccumulator,
+    pub accumulator: AverageAndErrorAccumulator,
 }
 
 impl ContinuousGrid {

@@ -4,7 +4,7 @@ description = "A Monte Carlo integrator that can handle nested discrete and cont
 edition = "2018"
 name = "havana"
 repository = "https://github.com/benruijl/havana"
-version = "0.1.2"
+version = "0.1.3"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -18,7 +18,7 @@ use_serde = ["serde"]
 [dependencies.pyo3]
 features = ["extension-module"]
 optional = true
-version = "0.13.1"
+version = "0.13"
 
 [dependencies]
 plotters = {version = "0.2.15", optional = true}
