@@ -1,10 +1,18 @@
 #[cfg(feature = "gridplotting")]
 use plotters::prelude::*;
 use rand::Rng;
-#[cfg(feature = "use_serde")]
+#[cfg(any(feature = "use_serde", feature = "python_bindings"))]
 use serde::{Deserialize, Serialize};
+use smallvec::{smallvec, SmallVec};
+
+#[cfg(feature = "python_bindings")]
+mod bindings;
 
 #[derive(Debug, Default, Clone)]
+#[cfg_attr(
+    any(feature = "use_serde", feature = "python_bindings"),
+    derive(Serialize, Deserialize)
+)]
 pub struct AverageAndErrorAccumulator {
     sum: f64,
     sum_sq: f64,
@@ -18,6 +26,12 @@ pub struct AverageAndErrorAccumulator {
     chi_sq_sum: f64,
     num_samples: usize,
     pub cur_iter: usize,
+    pub total_samples: usize,
+    pub max_eval_positive: f64,
+    pub max_eval_positive_xs: Option<Sample>,
+    pub max_eval_negative: f64,
+    pub max_eval_negative_xs: Option<Sample>,
+    pub num_zero_evals: usize,
 }
 
 impl AverageAndErrorAccumulator {
@@ -35,24 +49,61 @@ impl AverageAndErrorAccumulator {
             chi_sq_sum: 0.,
             num_samples: 0,
             cur_iter: 0,
+            total_samples: 0,
+            max_eval_positive: 0.,
+            max_eval_positive_xs: None,
+            max_eval_negative: 0.,
+            max_eval_negative_xs: None,
+            num_zero_evals: 0,
         }
     }
 
-    pub fn add_sample(&mut self, sample: f64) {
-        self.sum += sample;
-        self.sum_sq += sample * sample;
+    pub fn add_sample(&mut self, integrand: f64, sample: &Sample) {
+        self.sum += integrand;
+        self.sum_sq += integrand * integrand;
         self.num_samples += 1;
+        self.total_samples += 1;
+
+        if integrand == 0. {
+            self.num_zero_evals += 1;
+        }
+
+        if self.max_eval_positive_xs.is_none() || integrand > self.max_eval_positive {
+            self.max_eval_positive = integrand;
+            self.max_eval_positive_xs = Some(sample.clone());
+        }
+
+        if self.max_eval_negative_xs.is_none() || integrand < self.max_eval_negative {
+            self.max_eval_negative = integrand;
+            self.max_eval_negative_xs = Some(sample.clone());
+        }
     }
 
     pub fn merge_samples(&mut self, other: &mut AverageAndErrorAccumulator) {
-        self.sum += other.sum;
-        self.sum_sq += other.sum_sq;
-        self.num_samples += other.num_samples;
+        self.merge_samples_no_reset(other);
 
         // reset the other
         other.sum = 0.;
         other.sum_sq = 0.;
         other.num_samples = 0;
+        other.num_zero_evals = 0;
+    }
+
+    pub fn merge_samples_no_reset(&mut self, other: &AverageAndErrorAccumulator) {
+        self.sum += other.sum;
+        self.sum_sq += other.sum_sq;
+        self.num_samples += other.num_samples;
+        self.num_zero_evals += other.num_zero_evals;
+
+        if other.max_eval_positive > self.max_eval_positive {
+            self.max_eval_positive = other.max_eval_positive;
+            self.max_eval_positive_xs = other.max_eval_positive_xs.clone();
+        }
+
+        if other.max_eval_negative < self.max_eval_negative {
+            self.max_eval_negative = other.max_eval_negative;
+            self.max_eval_negative_xs = other.max_eval_negative_xs.clone();
+        }
     }
 
     pub fn update_iter(&mut self) {
@@ -95,10 +146,13 @@ impl AverageAndErrorAccumulator {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "use_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    any(feature = "use_serde", feature = "python_bindings"),
+    derive(Serialize, Deserialize)
+)]
 pub enum Sample {
     ContinuousGrid(f64, Vec<f64>),
-    DiscreteGrid(f64, Vec<usize>, Option<Box<Sample>>),
+    DiscreteGrid(f64, SmallVec<[usize; 1]>, Option<Box<Sample>>),
     MultiChannel(f64, usize, Vec<f64>), // sample point and weights
 }
 
@@ -118,7 +172,7 @@ impl Sample {
     pub fn to_discrete_grid(&mut self) -> &mut Self {
         match self {
             Sample::DiscreteGrid(..) => {}
-            _ => *self = Sample::DiscreteGrid(0., vec![], None),
+            _ => *self = Sample::DiscreteGrid(0., SmallVec::new(), None),
         }
         self
     }
@@ -137,6 +191,10 @@ impl Sample {
     }
 }
 #[derive(Debug, Clone)]
+#[cfg_attr(
+    any(feature = "use_serde", feature = "python_bindings"),
+    derive(Serialize, Deserialize)
+)]
 pub enum Grid {
     ContinuousGrid(ContinuousGrid),
     DiscreteGrid(DiscreteGrid),
@@ -157,6 +215,15 @@ impl Grid {
         }
     }
 
+    /// Merge a grid with exactly the same structure.
+    pub fn merge(&mut self, grid: &Grid) {
+        match (self, grid) {
+            (Grid::ContinuousGrid(c1), Grid::ContinuousGrid(c2)) => c1.merge(c2),
+            (Grid::DiscreteGrid(d1), Grid::DiscreteGrid(d2)) => d1.merge(d2),
+            _ => panic!("Cannot merge grids that have a different shape."),
+        }
+    }
+
     pub fn update<'a>(&mut self, alpha: f64, new_bin_length: usize) {
         match self {
             Grid::ContinuousGrid(g) => g.update(alpha, new_bin_length),
@@ -166,9 +233,14 @@ impl Grid {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(
+    any(feature = "use_serde", feature = "python_bindings"),
+    derive(Serialize, Deserialize)
+)]
 pub struct DiscreteDimension {
     pub cdf: Vec<f64>,
     bin_importance: Vec<f64>,
+    pub bin_accumulator: Vec<AverageAndErrorAccumulator>,
     counter: Vec<usize>,
     min_probability_per_bin: f64,
 }
@@ -178,6 +250,7 @@ impl DiscreteDimension {
         DiscreteDimension {
             cdf: (1..=n_values).map(|i| i as f64 / n_values as f64).collect(),
             bin_importance: vec![0.; n_values],
+            bin_accumulator: vec![AverageAndErrorAccumulator::new(); n_values],
             counter: vec![0; n_values],
             min_probability_per_bin,
         }
@@ -211,18 +284,40 @@ impl DiscreteDimension {
             self.cdf[sample]
         };
 
+        let avg = weight * fx * prob;
+        self.bin_accumulator[sample]
+            .add_sample(avg, &Sample::DiscreteGrid(weight, smallvec![sample], None));
+
         if train_on_avg {
-            self.bin_importance[sample] += weight * fx * prob;
+            self.bin_importance[sample] += avg;
         } else {
-            self.bin_importance[sample] += weight * weight * fx * fx * prob * prob;
+            self.bin_importance[sample] += avg * avg;
         }
 
         self.counter[sample] += 1;
     }
 
+    pub fn merge(&mut self, other: &DiscreteDimension) {
+        if self.cdf != other.cdf {
+            panic!("CDF not equivalent");
+        }
+
+        for (bi, obi) in self.bin_importance.iter_mut().zip(&other.bin_importance) {
+            *bi += obi;
+        }
+
+        for (c, oc) in self.counter.iter_mut().zip(&other.counter) {
+            *c += oc;
+        }
+    }
+
     fn update<'a>(&mut self, alpha: f64) {
         if alpha == 0. || self.bin_importance.iter().all(|x| *x == 0.) {
             return;
+        }
+
+        for acc in &mut self.bin_accumulator {
+            acc.update_iter();
         }
 
         // the bin importance is accumulated over all updates and is never reset
@@ -299,6 +394,10 @@ impl DiscreteDimension {
 
 // TODO: support a mix of continuous dimensions and discrete dimensions?
 #[derive(Debug, Clone)]
+#[cfg_attr(
+    any(feature = "use_serde", feature = "python_bindings"),
+    derive(Serialize, Deserialize)
+)]
 pub struct DiscreteGrid {
     pub discrete_dimensions: Vec<DiscreteDimension>,
     pub child_grids: Vec<Grid>,
@@ -382,10 +481,32 @@ impl DiscreteGrid {
                 self.child_grids[child_index].add_training_sample(&*s, fx, train_on_avg);
             }
 
-            self.accumulator.add_sample(fx * weight);
+            self.accumulator.add_sample(fx * weight, sample);
         } else {
             unreachable!("Sample cannot be converted to discrete sample: {:?}", self);
         }
+    }
+
+    pub fn merge(&mut self, other: &DiscreteGrid) {
+        if self.discrete_dimensions.len() != other.discrete_dimensions.len()
+            || self.child_grids.len() != other.child_grids.len()
+        {
+            panic!("Dimensions do not match");
+        }
+
+        for (d, o) in self
+            .discrete_dimensions
+            .iter_mut()
+            .zip(&other.discrete_dimensions)
+        {
+            d.merge(o);
+        }
+
+        for (c, o) in self.child_grids.iter_mut().zip(&other.child_grids) {
+            c.merge(o);
+        }
+
+        self.accumulator.merge_samples_no_reset(&other.accumulator);
     }
 
     pub fn update(&mut self, alpha: f64, new_bin_length: usize) {
@@ -406,6 +527,10 @@ impl DiscreteGrid {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(
+    any(feature = "use_serde", feature = "python_bindings"),
+    derive(Serialize, Deserialize)
+)]
 pub struct ContinuousGrid {
     pub continuous_dimensions: Vec<ContinuousDimension>,
     accumulator: AverageAndErrorAccumulator,
@@ -449,7 +574,7 @@ impl ContinuousGrid {
         }
 
         if let Sample::ContinuousGrid(weight, xs) = sample {
-            self.accumulator.add_sample(fx * weight);
+            self.accumulator.add_sample(fx * weight, sample);
 
             for (d, sdim) in self.continuous_dimensions.iter_mut().zip(xs) {
                 d.add_training_sample(*sdim, *weight, fx, train_on_avg)
@@ -459,6 +584,22 @@ impl ContinuousGrid {
                 "Sample cannot be converted to continuous sample: {:?}",
                 self
             );
+        }
+    }
+
+    pub fn merge(&mut self, grid: &ContinuousGrid) {
+        if self.continuous_dimensions.len() != grid.continuous_dimensions.len() {
+            panic!("Cannot merge grids that have a different shape.");
+        }
+
+        self.accumulator.merge_samples_no_reset(&grid.accumulator);
+
+        for (c, o) in self
+            .continuous_dimensions
+            .iter_mut()
+            .zip(&grid.continuous_dimensions)
+        {
+            c.merge(o);
         }
     }
 
@@ -476,6 +617,10 @@ impl ContinuousGrid {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(
+    any(feature = "use_serde", feature = "python_bindings"),
+    derive(Serialize, Deserialize)
+)]
 pub struct ContinuousDimension {
     pub partitioning: Vec<f64>,
     pub new_partitioning: Vec<f64>,
@@ -534,6 +679,20 @@ impl ContinuousDimension {
         }
 
         self.counter[index] += 1;
+    }
+
+    fn merge(&mut self, other: &ContinuousDimension) {
+        if self.partitioning != other.partitioning {
+            panic!("Partitions do not match");
+        }
+
+        for (bi, obi) in self.bin_importance.iter_mut().zip(&other.bin_importance) {
+            *bi += obi;
+        }
+
+        for (c, oc) in self.counter.iter_mut().zip(&other.counter) {
+            *c += oc;
+        }
     }
 
     fn update<'a>(&mut self, alpha: f64, new_bin_length: usize) {
