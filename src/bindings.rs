@@ -215,32 +215,34 @@ impl HavanaWrapper {
         Ok((acc.avg, acc.err, acc.chi_sq))
     }
 
-    fn get_top_level_accumulators(&self) -> PyResult<Vec<(f64, f64, f64)>> {
+    fn get_top_level_accumulators(&self) -> PyResult<Vec<(f64, f64, f64, f64, f64)>> {
         match &self.grid {
             Grid::ContinuousGrid(cs) => Ok(vec![(
                 cs.accumulator.avg,
                 cs.accumulator.err,
                 cs.accumulator.chi_sq,
+                cs.accumulator.max_eval_negative,
+                cs.accumulator.max_eval_positive,
             )]),
             Grid::DiscreteGrid(ds) => Ok(ds.discrete_dimensions[0]
                 .bin_accumulator
                 .iter()
-                .map(|acc| (acc.avg, acc.err, acc.chi_sq))
+                .map(|acc| (acc.avg, acc.err, acc.chi_sq, acc.max_eval_negative, acc.max_eval_positive))
                 .collect::<Vec<_>>()),
         }
     }
 
-    fn get_current_estimate(&self) -> PyResult<(f64, f64, f64)> {
+    fn get_current_estimate(&self) -> PyResult<(f64, f64, f64, f64, f64)> {
         match &self.grid {
             Grid::ContinuousGrid(cs) => {
                 let mut a = cs.accumulator.shallow_copy();
                 a.update_iter();
-                Ok((a.avg, a.err, a.chi_sq))
+                Ok((a.avg, a.err, a.chi_sq, a.max_eval_negative, a.max_eval_positive))
             }
             Grid::DiscreteGrid(ds) => {
                 let mut a = ds.accumulator.shallow_copy();
                 a.update_iter();
-                Ok((a.avg, a.err, a.chi_sq))
+                Ok((a.avg, a.err, a.chi_sq, a.max_eval_negative, a.max_eval_positive))
             }
         }
     }
