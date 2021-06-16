@@ -223,13 +223,13 @@ impl HavanaWrapper {
                 cs.accumulator.chi_sq,
                 cs.accumulator.max_eval_negative,
                 cs.accumulator.max_eval_positive,
-                cs.accumulator.num_samples,
+                cs.accumulator.total_samples,
                 cs.accumulator.num_zero_evals
             )]),
             Grid::DiscreteGrid(ds) => Ok(ds.discrete_dimensions[0]
                 .bin_accumulator
                 .iter()
-                .map(|acc| (acc.avg, acc.err, acc.chi_sq, acc.max_eval_negative, acc.max_eval_positive, acc.num_samples, acc.num_zero_evals))
+                .map(|acc| (acc.avg, acc.err, acc.chi_sq, acc.max_eval_negative, acc.max_eval_positive, acc.total_samples, acc.num_zero_evals))
                 .collect::<Vec<_>>()),
         }
     }
@@ -239,12 +239,12 @@ impl HavanaWrapper {
             Grid::ContinuousGrid(cs) => {
                 let mut a = cs.accumulator.shallow_copy();
                 a.update_iter();
-                Ok((a.avg, a.err, a.chi_sq, a.max_eval_negative, a.max_eval_positive, a.num_samples, a.num_zero_evals))
+                Ok((a.avg, a.err, a.chi_sq, a.max_eval_negative, a.max_eval_positive, a.total_samples, a.num_zero_evals))
             }
             Grid::DiscreteGrid(ds) => {
                 let mut a = ds.accumulator.shallow_copy();
                 a.update_iter();
-                Ok((a.avg, a.err, a.chi_sq, a.max_eval_negative, a.max_eval_positive, a.num_samples, a.num_zero_evals))
+                Ok((a.avg, a.err, a.chi_sq, a.max_eval_negative, a.max_eval_positive, a.total_samples, a.num_zero_evals))
             }
         }
     }

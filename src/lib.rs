@@ -24,7 +24,7 @@ pub struct AverageAndErrorAccumulator {
     pub chi_sq: f64,
     chi_sum: f64,
     chi_sq_sum: f64,
-    pub num_samples: usize,
+    num_samples: usize,
     pub cur_iter: usize,
     pub total_samples: usize,
     pub max_eval_positive: f64,
