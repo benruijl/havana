@@ -72,7 +72,7 @@ impl AverageAndErrorAccumulator {
             chi_sq_sum: self.chi_sq_sum,
             num_samples: self.num_samples,
             cur_iter: self.cur_iter,
-            total_samples: self.total_samples,
+            total_samples: self.total_samples+self.num_samples,
             max_eval_positive: self.max_eval_positive,
             max_eval_positive_xs: None,
             max_eval_negative: self.max_eval_negative,
@@ -85,7 +85,7 @@ impl AverageAndErrorAccumulator {
         self.sum += integrand;
         self.sum_sq += integrand * integrand;
         self.num_samples += 1;
-        self.total_samples += 1;
+        //self.total_samples += 1;
 
         if integrand == 0. {
             self.num_zero_evals += 1;
@@ -159,6 +159,8 @@ impl AverageAndErrorAccumulator {
         self.chi_sum += w;
         self.chi_sq_sum += w * self.sum;
         self.chi_sq = self.chi_sq_sum - self.avg * self.chi_sum;
+
+        self.total_samples += self.num_samples;
 
         // reset
         self.sum = 0.;
