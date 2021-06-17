@@ -22,14 +22,14 @@ fn main() {
 
             if let Sample::DiscreteGrid(weight, xs, _cont_sample) = &samples[si] {
                 let res = f(xs);
-                disc_grid.add_training_sample(&samples[si], res, false);
-                integral.add_sample(res * weight, &samples[si]);
+                disc_grid.add_training_sample(&samples[si], res);
+                integral.add_sample(res * weight, Some(&samples[si]));
             } else {
                 unreachable!()
             }
         }
 
-        disc_grid.update(1.5, 100);
+        disc_grid.update(1.5, 100, false);
 
         integral.update_iter();
 

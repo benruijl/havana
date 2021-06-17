@@ -119,10 +119,17 @@ impl HavanaWrapper {
     }
 
     #[staticmethod]
-    fn load_grid(filename: &str, seed: Option<u64>) -> PyResult<Self> {
+    #[args(format = "\"yaml\"", seed = "None")]
+    fn load_grid(filename: &str, format: &str, seed: Option<u64>) -> PyResult<Self> {
         let reader = std::fs::OpenOptions::new().read(true).open(filename)?;
-        let grid = serde_yaml::from_reader(&reader)
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+        let grid = match format {
+            "yaml" => serde_yaml::from_reader(&reader)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
+            "bin" => bincode::deserialize_from(&reader)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
+            _ => return Err(pyo3::exceptions::PyIOError::new_err("Unknown format")),
+        };
 
         Ok(HavanaWrapper {
             grid,
@@ -135,15 +142,22 @@ impl HavanaWrapper {
         })
     }
 
-    fn save_grid(&self, filename: &str) -> PyResult<()> {
-        let writer = std::fs::OpenOptions::new()
+    #[args(format = "\"yaml\"")]
+    fn save_grid(&self, filename: &str, format: &str) -> PyResult<()> {
+        let file = std::fs::OpenOptions::new()
             .write(true)
             .truncate(true)
             .create(true)
             .open(filename)?;
+        let writer = std::io::BufWriter::new(file);
 
-        serde_yaml::to_writer(writer, &self.grid)
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+        match format {
+            "yaml" => serde_yaml::to_writer(writer, &self.grid)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string())),
+            "bin" => bincode::serialize_into(writer, &self.grid)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string())),
+            _ => Err(pyo3::exceptions::PyIOError::new_err("Unknown format")),
+        }
     }
 
     fn sample(&mut self, num_samples: usize) -> PyResult<()> {
@@ -185,7 +199,7 @@ impl HavanaWrapper {
         Ok(out_samples)
     }
 
-    fn add_training_samples(&mut self, fx: Vec<f64>, train_on_avg: bool) -> PyResult<()> {
+    fn add_training_samples(&mut self, fx: Vec<f64>) -> PyResult<()> {
         if fx.len() != self.samples.len() {
             return PyResult::Err(pyo3::exceptions::PyAssertionError::new_err(
                 "Number of returned values does not equal number of samples",
@@ -193,7 +207,7 @@ impl HavanaWrapper {
         }
 
         for (s, f) in self.samples.iter().zip(&fx) {
-            self.grid.add_training_sample(s, *f, train_on_avg);
+            self.grid.add_training_sample(s, *f);
         }
 
         Ok(())
@@ -204,8 +218,13 @@ impl HavanaWrapper {
         Ok(())
     }
 
-    fn update(&mut self, alpha: f64, new_bin_length: usize) -> PyResult<(f64, f64, f64)> {
-        self.grid.update(alpha, new_bin_length);
+    fn update(
+        &mut self,
+        alpha: f64,
+        new_bin_length: usize,
+        train_on_avg: bool,
+    ) -> PyResult<(f64, f64, f64)> {
+        self.grid.update(alpha, new_bin_length, train_on_avg);
 
         let acc = match &self.grid {
             Grid::ContinuousGrid(cs) => &cs.accumulator,
@@ -215,32 +234,62 @@ impl HavanaWrapper {
         Ok((acc.avg, acc.err, acc.chi_sq))
     }
 
-    fn get_top_level_accumulators(&self) -> PyResult<Vec<(f64, f64, f64)>> {
+    fn get_top_level_accumulators(&self) -> PyResult<Vec<(f64, f64, f64, f64, f64, usize, usize)>> {
         match &self.grid {
             Grid::ContinuousGrid(cs) => Ok(vec![(
                 cs.accumulator.avg,
                 cs.accumulator.err,
                 cs.accumulator.chi_sq,
+                cs.accumulator.max_eval_negative,
+                cs.accumulator.max_eval_positive,
+                cs.accumulator.processed_samples,
+                cs.accumulator.num_zero_evals,
             )]),
             Grid::DiscreteGrid(ds) => Ok(ds.discrete_dimensions[0]
                 .bin_accumulator
                 .iter()
-                .map(|acc| (acc.avg, acc.err, acc.chi_sq))
+                .map(|a| {
+                    (
+                        a.avg,
+                        a.err,
+                        a.chi_sq,
+                        a.max_eval_negative,
+                        a.max_eval_positive,
+                        a.processed_samples,
+                        a.num_zero_evals,
+                    )
+                })
                 .collect::<Vec<_>>()),
         }
     }
 
-    fn get_current_estimate(&self) -> PyResult<(f64, f64, f64)> {
+    fn get_current_estimate(&self) -> PyResult<(f64, f64, f64, f64, f64, usize, usize)> {
         match &self.grid {
             Grid::ContinuousGrid(cs) => {
                 let mut a = cs.accumulator.shallow_copy();
                 a.update_iter();
-                Ok((a.avg, a.err, a.chi_sq))
+                Ok((
+                    a.avg,
+                    a.err,
+                    a.chi_sq,
+                    a.max_eval_negative,
+                    a.max_eval_positive,
+                    a.processed_samples,
+                    a.num_zero_evals,
+                ))
             }
             Grid::DiscreteGrid(ds) => {
                 let mut a = ds.accumulator.shallow_copy();
                 a.update_iter();
-                Ok((a.avg, a.err, a.chi_sq))
+                Ok((
+                    a.avg,
+                    a.err,
+                    a.chi_sq,
+                    a.max_eval_negative,
+                    a.max_eval_positive,
+                    a.processed_samples,
+                    a.num_zero_evals,
+                ))
             }
         }
     }

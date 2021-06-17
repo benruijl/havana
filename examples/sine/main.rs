@@ -15,14 +15,14 @@ fn main() {
             grid.sample(&mut rng, &mut sample);
             if let Sample::ContinuousGrid(cont_weight, cs) = &sample {
                 let res = f(cs[0]);
-                grid.add_training_sample(&sample, res, false);
-                integral.add_sample(res * cont_weight);
+                grid.add_training_sample(&sample, res);
+                integral.add_sample(res * cont_weight, None);
             } else {
                 unreachable!()
             }
         }
 
-        grid.update(1.5, 100);
+        grid.update(1.5, 100, false);
 
         integral.update_iter();
 

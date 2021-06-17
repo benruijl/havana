@@ -24,9 +24,9 @@ pub struct AverageAndErrorAccumulator {
     pub chi_sq: f64,
     chi_sum: f64,
     chi_sq_sum: f64,
-    num_samples: usize,
+    new_samples: usize,
     pub cur_iter: usize,
-    pub total_samples: usize,
+    pub processed_samples: usize,
     pub max_eval_positive: f64,
     pub max_eval_positive_xs: Option<Sample>,
     pub max_eval_negative: f64,
@@ -47,9 +47,9 @@ impl AverageAndErrorAccumulator {
             chi_sq: 0.,
             chi_sum: 0.,
             chi_sq_sum: 0.,
-            num_samples: 0,
+            new_samples: 0,
             cur_iter: 0,
-            total_samples: 0,
+            processed_samples: 0,
             max_eval_positive: 0.,
             max_eval_positive_xs: None,
             max_eval_negative: 0.,
@@ -70,9 +70,9 @@ impl AverageAndErrorAccumulator {
             chi_sq: self.chi_sq,
             chi_sum: self.sum,
             chi_sq_sum: self.chi_sq_sum,
-            num_samples: self.num_samples,
+            new_samples: self.new_samples,
             cur_iter: self.cur_iter,
-            total_samples: self.total_samples,
+            processed_samples: self.processed_samples,
             max_eval_positive: self.max_eval_positive,
             max_eval_positive_xs: None,
             max_eval_negative: self.max_eval_negative,
@@ -81,11 +81,10 @@ impl AverageAndErrorAccumulator {
         }
     }
 
-    pub fn add_sample(&mut self, integrand: f64, sample: &Sample) {
+    pub fn add_sample(&mut self, integrand: f64, sample: Option<&Sample>) {
         self.sum += integrand;
         self.sum_sq += integrand * integrand;
-        self.num_samples += 1;
-        self.total_samples += 1;
+        self.new_samples += 1;
 
         if integrand == 0. {
             self.num_zero_evals += 1;
@@ -93,12 +92,12 @@ impl AverageAndErrorAccumulator {
 
         if self.max_eval_positive_xs.is_none() || integrand > self.max_eval_positive {
             self.max_eval_positive = integrand;
-            self.max_eval_positive_xs = Some(sample.clone());
+            self.max_eval_positive_xs = sample.map(|x| x.clone());
         }
 
         if self.max_eval_negative_xs.is_none() || integrand < self.max_eval_negative {
             self.max_eval_negative = integrand;
-            self.max_eval_negative_xs = Some(sample.clone());
+            self.max_eval_negative_xs = sample.map(|x| x.clone());
         }
     }
 
@@ -108,14 +107,14 @@ impl AverageAndErrorAccumulator {
         // reset the other
         other.sum = 0.;
         other.sum_sq = 0.;
-        other.num_samples = 0;
+        other.new_samples = 0;
         other.num_zero_evals = 0;
     }
 
     pub fn merge_samples_no_reset(&mut self, other: &AverageAndErrorAccumulator) {
         self.sum += other.sum;
         self.sum_sq += other.sum_sq;
-        self.num_samples += other.num_samples;
+        self.new_samples += other.new_samples;
         self.num_zero_evals += other.num_zero_evals;
 
         if other.max_eval_positive > self.max_eval_positive {
@@ -131,12 +130,13 @@ impl AverageAndErrorAccumulator {
 
     pub fn update_iter(&mut self) {
         // TODO: we could be throwing away events that are very rare
-        if self.num_samples < 2 {
+        if self.new_samples < 2 {
             self.cur_iter += 1;
             return;
         }
 
-        let n = self.num_samples as f64;
+        self.processed_samples += self.new_samples;
+        let n = self.new_samples as f64;
         self.sum /= n;
         self.sum_sq /= n * n;
         let mut w = (self.sum_sq * n).sqrt();
@@ -163,7 +163,7 @@ impl AverageAndErrorAccumulator {
         // reset
         self.sum = 0.;
         self.sum_sq = 0.;
-        self.num_samples = 0;
+        self.new_samples = 0;
         self.cur_iter += 1;
     }
 }
@@ -231,10 +231,10 @@ impl Grid {
         }
     }
 
-    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64, train_on_avg: bool) {
+    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64) {
         match self {
-            Grid::ContinuousGrid(g) => g.add_training_sample(sample, fx, train_on_avg),
-            Grid::DiscreteGrid(g) => g.add_training_sample(sample, fx, train_on_avg),
+            Grid::ContinuousGrid(g) => g.add_training_sample(sample, fx),
+            Grid::DiscreteGrid(g) => g.add_training_sample(sample, fx),
         }
     }
 
@@ -247,10 +247,10 @@ impl Grid {
         }
     }
 
-    pub fn update<'a>(&mut self, alpha: f64, new_bin_length: usize) {
+    pub fn update<'a>(&mut self, alpha: f64, new_bin_length: usize, train_on_avg: bool) {
         match self {
-            Grid::ContinuousGrid(g) => g.update(alpha, new_bin_length),
-            Grid::DiscreteGrid(g) => g.update(alpha, new_bin_length),
+            Grid::ContinuousGrid(g) => g.update(alpha, new_bin_length, train_on_avg),
+            Grid::DiscreteGrid(g) => g.update(alpha, new_bin_length, train_on_avg),
         }
     }
 }
@@ -292,7 +292,7 @@ impl DiscreteDimension {
         unreachable!("Could not sample discrete dimension: {:?}", self.cdf);
     }
 
-    fn add_training_sample(&mut self, sample: usize, weight: f64, fx: f64, train_on_avg: bool) {
+    fn add_training_sample(&mut self, sample: usize, weight: f64, fx: f64) {
         if sample >= self.cdf.len() {
             panic!(
                 "Sample outside of range: sample={}, range=[0,{})",
@@ -307,34 +307,39 @@ impl DiscreteDimension {
             self.cdf[sample]
         };
 
-        let avg = weight * fx * prob;
-        self.bin_accumulator[sample]
-            .add_sample(avg, &Sample::DiscreteGrid(weight, smallvec![sample], None));
-
-        if train_on_avg {
-            self.bin_importance[sample] += avg;
-        } else {
-            self.bin_importance[sample] += avg * avg;
-        }
-
-        self.counter[sample] += 1;
+        self.bin_accumulator[sample].add_sample(
+            weight * fx * prob,
+            Some(&Sample::DiscreteGrid(weight, smallvec![sample], None)),
+        );
     }
 
     pub fn merge(&mut self, other: &DiscreteDimension) {
-        if self.cdf != other.cdf {
+        if self.cdf != other.cdf
+            && self.bin_importance == other.bin_importance
+            && self.counter == other.counter
+        {
             panic!("CDF not equivalent");
         }
 
-        for (bi, obi) in self.bin_importance.iter_mut().zip(&other.bin_importance) {
-            *bi += obi;
-        }
-
-        for (c, oc) in self.counter.iter_mut().zip(&other.counter) {
-            *c += oc;
+        for (bi, obi) in self.bin_accumulator.iter_mut().zip(&other.bin_accumulator) {
+            bi.merge_samples_no_reset(obi);
         }
     }
 
-    fn update<'a>(&mut self, alpha: f64) {
+    fn update<'a>(&mut self, alpha: f64, train_on_avg: bool) {
+        // accumulate the samples in the bin importance so that the cdf converges over time
+        for (bi, acc) in self.bin_importance.iter_mut().zip(&self.bin_accumulator) {
+            if train_on_avg {
+                *bi += acc.sum
+            } else {
+                *bi += acc.sum_sq;
+            }
+        }
+
+        for (c, acc) in self.counter.iter_mut().zip(&self.bin_accumulator) {
+            *c += acc.new_samples;
+        }
+
         if alpha == 0. || self.bin_importance.iter().all(|x| *x == 0.) {
             return;
         }
@@ -485,7 +490,7 @@ impl DiscreteGrid {
         }
     }
 
-    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64, train_on_avg: bool) {
+    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64) {
         if !fx.is_finite() {
             panic!(
                 "Added training sample that is not finite: sample={:?}, fx={}",
@@ -497,14 +502,14 @@ impl DiscreteGrid {
             let mut child_index = 0;
             for (d, sdim) in self.discrete_dimensions.iter_mut().zip(xs) {
                 child_index += *sdim; // (*sdim as f64 * d.cdf.len() as f64) as usize;
-                d.add_training_sample(*sdim, *weight, fx, train_on_avg)
+                d.add_training_sample(*sdim, *weight, fx)
             }
 
             if let Some(s) = sub_sample {
-                self.child_grids[child_index].add_training_sample(&*s, fx, train_on_avg);
+                self.child_grids[child_index].add_training_sample(&*s, fx);
             }
 
-            self.accumulator.add_sample(fx * weight, sample);
+            self.accumulator.add_sample(fx * weight, Some(sample));
         } else {
             unreachable!("Sample cannot be converted to discrete sample: {:?}", self);
         }
@@ -532,20 +537,16 @@ impl DiscreteGrid {
         self.accumulator.merge_samples_no_reset(&other.accumulator);
     }
 
-    pub fn update(&mut self, alpha: f64, new_bin_length: usize) {
+    pub fn update(&mut self, alpha: f64, new_bin_length: usize, train_on_avg: bool) {
         for d in self.discrete_dimensions.iter_mut() {
-            d.update(alpha);
+            d.update(alpha, train_on_avg);
         }
 
         for d in self.child_grids.iter_mut() {
-            d.update(alpha, new_bin_length);
+            d.update(alpha, new_bin_length, train_on_avg);
         }
 
         self.accumulator.update_iter();
-        /*println!(
-            "Discrete grid result: {} +- {}",
-            self.accumulator.avg, self.accumulator.err
-        );*/
     }
 }
 
@@ -588,7 +589,7 @@ impl ContinuousGrid {
         }
     }
 
-    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64, train_on_avg: bool) {
+    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64) {
         if !fx.is_finite() {
             panic!(
                 "Added training sample that is not finite: sample={:?}, fx={}",
@@ -597,10 +598,10 @@ impl ContinuousGrid {
         }
 
         if let Sample::ContinuousGrid(weight, xs) = sample {
-            self.accumulator.add_sample(fx * weight, sample);
+            self.accumulator.add_sample(fx * weight, Some(sample));
 
             for (d, sdim) in self.continuous_dimensions.iter_mut().zip(xs) {
-                d.add_training_sample(*sdim, *weight, fx, train_on_avg)
+                d.add_training_sample(*sdim, *weight, fx);
             }
         } else {
             unreachable!(
@@ -626,16 +627,12 @@ impl ContinuousGrid {
         }
     }
 
-    pub fn update(&mut self, alpha: f64, new_bin_length: usize) {
+    pub fn update(&mut self, alpha: f64, new_bin_length: usize, train_on_avg: bool) {
         for d in self.continuous_dimensions.iter_mut() {
-            d.update(alpha, new_bin_length);
+            d.update(alpha, new_bin_length, train_on_avg);
         }
 
         self.accumulator.update_iter();
-        /*println!(
-            "Result: {} +- {}",
-            self.accumulator.avg, self.accumulator.err
-        );*/
     }
 }
 
@@ -647,6 +644,7 @@ impl ContinuousGrid {
 pub struct ContinuousDimension {
     pub partitioning: Vec<f64>,
     pub new_partitioning: Vec<f64>,
+    bin_accumulator: Vec<AverageAndErrorAccumulator>,
     bin_importance: Vec<f64>,
     counter: Vec<usize>,
     min_samples_for_update: usize,
@@ -658,6 +656,7 @@ impl ContinuousDimension {
             partitioning: (0..=n_bins).map(|i| i as f64 / n_bins as f64).collect(),
             new_partitioning: vec![],
             bin_importance: vec![0.; n_bins],
+            bin_accumulator: vec![AverageAndErrorAccumulator::new(); n_bins],
             counter: vec![0; n_bins],
             min_samples_for_update,
         }
@@ -679,7 +678,7 @@ impl ContinuousDimension {
         (sample, weight)
     }
 
-    fn add_training_sample(&mut self, sample: f64, weight: f64, fx: f64, train_on_avg: bool) {
+    fn add_training_sample(&mut self, sample: f64, weight: f64, fx: f64) {
         if sample < 0. || sample > 1. || !fx.is_finite() || !weight.is_finite() {
             panic!(
                 "Malformed sample point: sample={}, weight={}, fx={}",
@@ -695,13 +694,7 @@ impl ContinuousDimension {
             index -= 1;
         }
 
-        if train_on_avg {
-            self.bin_importance[index] += weight * fx;
-        } else {
-            self.bin_importance[index] += weight * weight * fx * fx;
-        }
-
-        self.counter[index] += 1;
+        self.bin_accumulator[index].add_sample(weight * fx, None);
     }
 
     fn merge(&mut self, other: &ContinuousDimension) {
@@ -709,22 +702,35 @@ impl ContinuousDimension {
             panic!("Partitions do not match");
         }
 
-        for (bi, obi) in self.bin_importance.iter_mut().zip(&other.bin_importance) {
-            *bi += obi;
-        }
-
-        for (c, oc) in self.counter.iter_mut().zip(&other.counter) {
-            *c += oc;
+        for (bi, obi) in self.bin_accumulator.iter_mut().zip(&other.bin_accumulator) {
+            bi.merge_samples_no_reset(obi);
         }
     }
 
-    fn update<'a>(&mut self, alpha: f64, new_bin_length: usize) {
+    fn update<'a>(&mut self, alpha: f64, new_bin_length: usize, train_on_avg: bool) {
+        for (bi, acc) in self.bin_importance.iter_mut().zip(&self.bin_accumulator) {
+            if train_on_avg {
+                *bi += acc.sum
+            } else {
+                *bi += acc.sum_sq;
+            }
+        }
+
+        for (c, acc) in self.counter.iter_mut().zip(&self.bin_accumulator) {
+            *c += acc.new_samples;
+        }
+
         if self.counter.iter().sum::<usize>() < self.min_samples_for_update {
             // do not train the grid if there is a lack of samples
             return;
         }
 
         if alpha == 0. {
+            self.bin_accumulator.clear();
+            self.bin_accumulator.resize(
+                self.partitioning.len() - 1,
+                AverageAndErrorAccumulator::new(),
+            );
             self.bin_importance.clear();
             self.bin_importance.resize(self.partitioning.len() - 1, 0.);
             self.counter.clear();
@@ -817,6 +823,11 @@ impl ContinuousDimension {
         self.bin_importance.resize(self.partitioning.len() - 1, 0.);
         self.counter.clear();
         self.counter.resize(self.partitioning.len() - 1, 0);
+        self.bin_accumulator.clear();
+        self.bin_accumulator.resize(
+            self.partitioning.len() - 1,
+            AverageAndErrorAccumulator::new(),
+        );
     }
 
     #[cfg(feature = "gridplotting")]
