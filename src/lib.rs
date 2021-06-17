@@ -25,6 +25,7 @@ pub struct AverageAndErrorAccumulator {
     chi_sum: f64,
     chi_sq_sum: f64,
     new_samples: usize,
+    new_zero_evals: usize,
     pub cur_iter: usize,
     pub processed_samples: usize,
     pub max_eval_positive: f64,
@@ -48,6 +49,7 @@ impl AverageAndErrorAccumulator {
             chi_sum: 0.,
             chi_sq_sum: 0.,
             new_samples: 0,
+            new_zero_evals: 0,
             cur_iter: 0,
             processed_samples: 0,
             max_eval_positive: 0.,
@@ -68,9 +70,10 @@ impl AverageAndErrorAccumulator {
             err: self.err,
             guess: self.guess,
             chi_sq: self.chi_sq,
-            chi_sum: self.sum,
+            chi_sum: self.chi_sum,
             chi_sq_sum: self.chi_sq_sum,
             new_samples: self.new_samples,
+            new_zero_evals: self.new_zero_evals,
             cur_iter: self.cur_iter,
             processed_samples: self.processed_samples,
             max_eval_positive: self.max_eval_positive,
@@ -87,7 +90,7 @@ impl AverageAndErrorAccumulator {
         self.new_samples += 1;
 
         if integrand == 0. {
-            self.num_zero_evals += 1;
+            self.new_zero_evals += 1;
         }
 
         if self.max_eval_positive_xs.is_none() || integrand > self.max_eval_positive {
@@ -108,14 +111,14 @@ impl AverageAndErrorAccumulator {
         other.sum = 0.;
         other.sum_sq = 0.;
         other.new_samples = 0;
-        other.num_zero_evals = 0;
+        other.new_zero_evals = 0;
     }
 
     pub fn merge_samples_no_reset(&mut self, other: &AverageAndErrorAccumulator) {
         self.sum += other.sum;
         self.sum_sq += other.sum_sq;
         self.new_samples += other.new_samples;
-        self.num_zero_evals += other.num_zero_evals;
+        self.new_zero_evals += other.new_zero_evals;
 
         if other.max_eval_positive > self.max_eval_positive {
             self.max_eval_positive = other.max_eval_positive;
@@ -136,6 +139,7 @@ impl AverageAndErrorAccumulator {
         }
 
         self.processed_samples += self.new_samples;
+        self.num_zero_evals += self.new_zero_evals;
         let n = self.new_samples as f64;
         self.sum /= n;
         self.sum_sq /= n * n;
@@ -164,6 +168,7 @@ impl AverageAndErrorAccumulator {
         self.sum = 0.;
         self.sum_sq = 0.;
         self.new_samples = 0;
+        self.new_zero_evals = 0;
         self.cur_iter += 1;
     }
 }
@@ -262,20 +267,16 @@ impl Grid {
 )]
 pub struct DiscreteDimension {
     pub cdf: Vec<f64>,
-    bin_importance: Vec<f64>,
     pub bin_accumulator: Vec<AverageAndErrorAccumulator>,
-    counter: Vec<usize>,
-    min_probability_per_bin: f64,
+    max_prob_ratio: f64,
 }
 
 impl DiscreteDimension {
-    pub fn new(n_values: usize, min_probability_per_bin: f64) -> DiscreteDimension {
+    pub fn new(n_values: usize, max_prob_ratio: f64) -> DiscreteDimension {
         DiscreteDimension {
             cdf: (1..=n_values).map(|i| i as f64 / n_values as f64).collect(),
-            bin_importance: vec![0.; n_values],
             bin_accumulator: vec![AverageAndErrorAccumulator::new(); n_values],
-            counter: vec![0; n_values],
-            min_probability_per_bin,
+            max_prob_ratio,
         }
     }
 
@@ -314,10 +315,7 @@ impl DiscreteDimension {
     }
 
     pub fn merge(&mut self, other: &DiscreteDimension) {
-        if self.cdf != other.cdf
-            && self.bin_importance == other.bin_importance
-            && self.counter == other.counter
-        {
+        if self.cdf != other.cdf {
             panic!("CDF not equivalent");
         }
 
@@ -327,54 +325,45 @@ impl DiscreteDimension {
     }
 
     fn update<'a>(&mut self, alpha: f64, train_on_avg: bool) {
-        // accumulate the samples in the bin importance so that the cdf converges over time
-        for (bi, acc) in self.bin_importance.iter_mut().zip(&self.bin_accumulator) {
-            if train_on_avg {
-                *bi += acc.sum
-            } else {
-                *bi += acc.sum_sq;
-            }
-        }
-
-        for (c, acc) in self.counter.iter_mut().zip(&self.bin_accumulator) {
-            *c += acc.new_samples;
-        }
-
-        if alpha == 0. || self.bin_importance.iter().all(|x| *x == 0.) {
-            return;
-        }
-
         for acc in &mut self.bin_accumulator {
             acc.update_iter();
         }
 
-        // the bin importance is accumulated over all updates and is never reset
-        let mut sum = 0.;
-        for ((c, &bi), &co) in self
-            .cdf
-            .iter_mut()
-            .zip(&self.bin_importance)
-            .zip(&self.counter)
+        if alpha == 0.
+            || self.bin_accumulator.iter().all(|x| {
+                if train_on_avg {
+                    x.avg == 0.
+                } else {
+                    x.err == 0.
+                }
+            })
         {
-            if co > 0 {
-                *c = bi.abs() / co as f64;
-                sum += *c;
-            }
+            return;
         }
 
-        for c in self.cdf.iter_mut() {
-            if sum == 0. {
-                *c = 1. / self.bin_importance.len() as f64;
+        let mut max_per_bin = 0.;
+        for (c, acc) in self.cdf.iter_mut().zip(&self.bin_accumulator) {
+            if train_on_avg {
+                *c = acc.avg.abs()
             } else {
-                *c = *c / sum * (1. - self.min_probability_per_bin)
-                    + self.min_probability_per_bin / self.bin_importance.len() as f64;
+                *c = acc.err;
+            }
+
+            if *c > max_per_bin {
+                max_per_bin = *c;
             }
         }
 
-        // now do the cdf
+        let mut sum = 0.;
+        for pdf in &mut self.cdf {
+            *pdf = pdf.max(max_per_bin / self.max_prob_ratio);
+            sum += *pdf;
+        }
+
+        // TODO: use alpha to adjust updating speed of the cdf
         let mut last = 0.;
         for c in self.cdf.iter_mut() {
-            *c = *c + last;
+            *c = *c / sum + last;
             last = *c;
         }
     }
@@ -436,12 +425,12 @@ impl DiscreteGrid {
     pub fn new(
         values_per_dim: &[usize],
         child_grids: Vec<Grid>,
-        minimum_probability: f64,
+        max_prob_ratio: f64,
     ) -> DiscreteGrid {
         DiscreteGrid {
             discrete_dimensions: values_per_dim
                 .iter()
-                .map(|i| DiscreteDimension::new(*i, minimum_probability))
+                .map(|i| DiscreteDimension::new(*i, max_prob_ratio))
                 .collect(),
             child_grids,
             accumulator: AverageAndErrorAccumulator::new(),

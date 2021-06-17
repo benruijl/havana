@@ -62,7 +62,7 @@ impl ContinuousGridConstructor {
 pub struct DiscreteGridConstructor {
     values_per_dim: Vec<usize>,
     child_grids: Vec<GridConstructor>,
-    minimum_probability: f64,
+    max_prob_ratio: f64,
 }
 
 #[pymethods]
@@ -71,12 +71,12 @@ impl DiscreteGridConstructor {
     fn new(
         values_per_dim: Vec<usize>,
         child_grids: Vec<GridConstructor>,
-        minimum_probability: f64,
+        max_prob_ratio: f64,
     ) -> Self {
         DiscreteGridConstructor {
             values_per_dim,
             child_grids,
-            minimum_probability,
+            max_prob_ratio,
         }
     }
 }
@@ -96,7 +96,7 @@ impl HavanaWrapper {
                     .iter()
                     .map(|chg| HavanaWrapper::construct_grid(chg))
                     .collect::<Vec<_>>(),
-                dg.minimum_probability,
+                dg.max_prob_ratio,
             ))
         } else {
             unreachable!("No grid specified")
@@ -157,7 +157,7 @@ impl HavanaWrapper {
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
             "bin" => bincode::serialize_into(&mut writer, &self.grid)
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
-            _ => return Err(pyo3::exceptions::PyIOError::new_err("Unknown format")),
+            _ => return Err(pyo3::exceptions::PyTypeError::new_err("Unknown format")),
         }
 
         writer
@@ -265,6 +265,13 @@ impl HavanaWrapper {
                     )
                 })
                 .collect::<Vec<_>>()),
+        }
+    }
+
+    fn get_top_level_cdfs(&self) -> PyResult<Option<Vec<f64>>> {
+        match &self.grid {
+            Grid::ContinuousGrid(_cs) => Ok(None),
+            Grid::DiscreteGrid(ds) => Ok(Some(ds.discrete_dimensions[0].cdf.clone())),
         }
     }
 
