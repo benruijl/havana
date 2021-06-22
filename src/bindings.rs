@@ -1,7 +1,6 @@
 use crate::*;
 use pyo3::prelude::*;
 use rand::SeedableRng;
-use std::io::Write;
 use tinymt::{TinyMT64, TinyMT64Seed};
 
 #[pyclass(name = "Havana")]
@@ -121,13 +120,11 @@ impl HavanaWrapper {
 
     #[staticmethod]
     #[args(format = "\"yaml\"", seed = "None")]
-    fn load_grid(filename: &str, format: &str, seed: Option<u64>) -> PyResult<Self> {
-        let reader = std::fs::OpenOptions::new().read(true).open(filename)?;
-
+    fn load_grid(data: &[u8], format: &str, seed: Option<u64>) -> PyResult<Self> {
         let grid = match format {
-            "yaml" => serde_yaml::from_reader(&reader)
+            "yaml" => serde_yaml::from_slice(data)
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
-            "bin" => bincode::deserialize_from(&reader)
+            "bin" => bincode::deserialize(data)
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
             _ => return Err(pyo3::exceptions::PyIOError::new_err("Unknown format")),
         };
@@ -144,25 +141,14 @@ impl HavanaWrapper {
     }
 
     #[args(format = "\"yaml\"")]
-    fn save_grid(&self, filename: &str, format: &str) -> PyResult<()> {
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .create(true)
-            .open(filename)?;
-        let mut writer = std::io::BufWriter::new(file);
-
+    fn dump_grid(&self, format: &str) -> PyResult<Vec<u8>> {
         match format {
-            "yaml" => serde_yaml::to_writer(&mut writer, &self.grid)
-                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
-            "bin" => bincode::serialize_into(&mut writer, &self.grid)
-                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
+            "yaml" => serde_yaml::to_vec(&self.grid)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string())),
+            "bin" => bincode::serialize(&self.grid)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string())),
             _ => return Err(pyo3::exceptions::PyTypeError::new_err("Unknown format")),
         }
-
-        writer
-            .flush()
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
     }
 
     fn sample(&mut self, num_samples: usize) -> PyResult<()> {
