@@ -1,5 +1,5 @@
 use crate::*;
-use pyo3::prelude::*;
+use pyo3::{prelude::*, types::PyBytes};
 use rand::SeedableRng;
 use tinymt::{TinyMT64, TinyMT64Seed};
 
@@ -141,11 +141,13 @@ impl HavanaWrapper {
     }
 
     #[args(format = "\"yaml\"")]
-    fn dump_grid(&self, format: &str) -> PyResult<Vec<u8>> {
+    fn dump_grid<'p>(&self, py: Python<'p>, format: &str) -> PyResult<&'p PyBytes> {
         match format {
             "yaml" => serde_yaml::to_vec(&self.grid)
+                .map(|a| PyBytes::new(py, &a))
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string())),
             "bin" => bincode::serialize(&self.grid)
+                .map(|a| PyBytes::new(py, &a))
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string())),
             _ => return Err(pyo3::exceptions::PyTypeError::new_err("Unknown format")),
         }
