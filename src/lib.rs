@@ -302,14 +302,8 @@ impl DiscreteDimension {
             );
         }
 
-        let prob = if sample > 0 {
-            self.cdf[sample] - self.cdf[sample - 1]
-        } else {
-            self.cdf[sample]
-        };
-
         self.bin_accumulator[sample].add_sample(
-            weight * fx * prob,
+            weight * fx,
             Some(&Sample::DiscreteGrid(weight, smallvec![sample], None)),
         );
     }
@@ -427,6 +421,10 @@ impl DiscreteGrid {
         child_grids: Vec<Grid>,
         max_prob_ratio: f64,
     ) -> DiscreteGrid {
+        if values_per_dim.len() > 1 {
+            panic!("Factorized discrete dimensions are not supported yet.");
+        }
+
         DiscreteGrid {
             discrete_dimensions: values_per_dim
                 .iter()
@@ -488,10 +486,15 @@ impl DiscreteGrid {
         }
 
         if let Sample::DiscreteGrid(weight, xs, sub_sample) = sample {
+            let sub_sample_weight = sub_sample.as_ref().map(|s| s.get_weight()).unwrap_or(1.);
+
             let mut child_index = 0;
             for (d, sdim) in self.discrete_dimensions.iter_mut().zip(xs) {
-                child_index += *sdim; // (*sdim as f64 * d.cdf.len() as f64) as usize;
-                d.add_training_sample(*sdim, *weight, fx)
+                child_index += *sdim;
+                // we normalize the samples per option of the discrete dimension with a counter per option,
+                // so we remove the pdf from the sample weight (as pdf * grid_sample_count = option_count )
+                // TODO: this weight is not correct for multiple dimensions in the discrete grid
+                d.add_training_sample(*sdim, sub_sample_weight, fx)
             }
 
             if let Some(s) = sub_sample {
