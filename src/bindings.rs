@@ -227,21 +227,37 @@ impl HavanaWrapper {
         Ok((acc.avg, acc.err, acc.chi_sq))
     }
 
-    fn get_top_level_accumulators(&self) -> PyResult<Vec<(f64, f64, f64, f64, f64, usize, usize)>> {
+    #[args(live = "false")]
+    fn get_top_level_accumulators(
+        &self,
+        live: bool,
+    ) -> PyResult<Vec<(f64, f64, f64, f64, f64, usize, usize)>> {
         match &self.grid {
-            Grid::ContinuousGrid(cs) => Ok(vec![(
-                cs.accumulator.avg,
-                cs.accumulator.err,
-                cs.accumulator.chi_sq,
-                cs.accumulator.max_eval_negative,
-                cs.accumulator.max_eval_positive,
-                cs.accumulator.processed_samples,
-                cs.accumulator.num_zero_evals,
-            )]),
+            Grid::ContinuousGrid(cs) => {
+                let mut a = cs.accumulator.shallow_copy();
+                if live {
+                    a.update_iter();
+                }
+
+                Ok(vec![(
+                    a.avg,
+                    a.err,
+                    a.chi_sq,
+                    a.max_eval_negative,
+                    a.max_eval_positive,
+                    a.processed_samples,
+                    a.num_zero_evals,
+                )])
+            }
             Grid::DiscreteGrid(ds) => Ok(ds.discrete_dimensions[0]
                 .bin_accumulator
                 .iter()
-                .map(|a| {
+                .map(|b| {
+                    let mut a = b.shallow_copy();
+                    if live {
+                        a.update_iter();
+                    }
+
                     (
                         a.avg,
                         a.err,
