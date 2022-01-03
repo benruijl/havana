@@ -243,8 +243,18 @@ impl Grid {
         }
     }
 
+    pub fn is_mergeable(&self, grid: &Grid) -> Result<(), String> {
+        match (self, grid) {
+            (Grid::ContinuousGrid(c1), Grid::ContinuousGrid(c2)) => c1.is_mergeable(c2),
+            (Grid::DiscreteGrid(d1), Grid::DiscreteGrid(d2)) => d1.is_mergeable(d2),
+            _ => Err("Cannot merge grids that have a different shape.".to_owned()),
+        }
+    }
+
     /// Merge a grid with exactly the same structure.
     pub fn merge(&mut self, grid: &Grid) -> Result<(), String> {
+        self.is_mergeable(grid)?; // note that this check has exponential run-off
+
         match (self, grid) {
             (Grid::ContinuousGrid(c1), Grid::ContinuousGrid(c2)) => c1.merge(c2),
             (Grid::DiscreteGrid(d1), Grid::DiscreteGrid(d2)) => d1.merge(d2),
@@ -307,6 +317,14 @@ impl DiscreteDimension {
             Some(&Sample::DiscreteGrid(weight, smallvec![sample], None)),
         );
         Ok(())
+    }
+
+    pub fn is_mergeable(&self, other: &DiscreteDimension) -> Result<(), String> {
+        if self.cdf != other.cdf {
+            return Err("CDF not equivalent".to_owned());
+        } else {
+            Ok(())
+        }
     }
 
     pub fn merge(&mut self, other: &DiscreteDimension) -> Result<(), String> {
@@ -511,6 +529,28 @@ impl DiscreteGrid {
         }
     }
 
+    pub fn is_mergeable(&self, other: &DiscreteGrid) -> Result<(), String> {
+        if self.discrete_dimensions.len() != other.discrete_dimensions.len()
+            || self.child_grids.len() != other.child_grids.len()
+        {
+            return Err("Discrete grid dimensions do not match".to_owned());
+        }
+
+        for (d, o) in self
+            .discrete_dimensions
+            .iter()
+            .zip(&other.discrete_dimensions)
+        {
+            d.is_mergeable(o)?;
+        }
+
+        for (c, o) in self.child_grids.iter().zip(&other.child_grids) {
+            c.is_mergeable(o)?;
+        }
+
+        Ok(())
+    }
+
     pub fn merge(&mut self, other: &DiscreteGrid) -> Result<(), String> {
         if self.discrete_dimensions.len() != other.discrete_dimensions.len()
             || self.child_grids.len() != other.child_grids.len()
@@ -609,6 +649,21 @@ impl ContinuousGrid {
         }
     }
 
+    pub fn is_mergeable(&self, grid: &ContinuousGrid) -> Result<(), String> {
+        if self.continuous_dimensions.len() != grid.continuous_dimensions.len() {
+            return Err("Cannot merge grids that have a different shape.".to_owned());
+        }
+
+        for (c, o) in self
+            .continuous_dimensions
+            .iter()
+            .zip(&grid.continuous_dimensions)
+        {
+            c.is_mergeable(o)?;
+        }
+        Ok(())
+    }
+
     pub fn merge(&mut self, grid: &ContinuousGrid) -> Result<(), String> {
         if self.continuous_dimensions.len() != grid.continuous_dimensions.len() {
             return Err("Cannot merge grids that have a different shape.".to_owned());
@@ -695,6 +750,14 @@ impl ContinuousDimension {
 
         self.bin_accumulator[index].add_sample(weight * fx, None);
         Ok(())
+    }
+
+    fn is_mergeable(&self, other: &ContinuousDimension) -> Result<(), String> {
+        if self.partitioning != other.partitioning {
+            return Err("Partitions do not match".to_owned());
+        } else {
+            Ok(())
+        }
     }
 
     fn merge(&mut self, other: &ContinuousDimension) -> Result<(), String> {
