@@ -25,7 +25,7 @@ fn main() {
             if let Sample::DiscreteGrid(weight, xs, cont_sample) = &samples[si] {
                 if let Sample::ContinuousGrid(_cont_weight, cs) = &**cont_sample.as_ref().unwrap() {
                     let res = if xs[0] == 0 { f(cs[0]) } else { f1(cs[0]) };
-                    disc_grid.add_training_sample(&samples[si], res);
+                    disc_grid.add_training_sample(&samples[si], res).unwrap();
                     integral.add_sample(res * weight, None);
                 } else {
                     unreachable!()

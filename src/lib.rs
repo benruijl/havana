@@ -236,7 +236,7 @@ impl Grid {
         }
     }
 
-    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64) {
+    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64) -> Result<(), String> {
         match self {
             Grid::ContinuousGrid(g) => g.add_training_sample(sample, fx),
             Grid::DiscreteGrid(g) => g.add_training_sample(sample, fx),
@@ -244,11 +244,11 @@ impl Grid {
     }
 
     /// Merge a grid with exactly the same structure.
-    pub fn merge(&mut self, grid: &Grid) {
+    pub fn merge(&mut self, grid: &Grid) -> Result<(), String> {
         match (self, grid) {
             (Grid::ContinuousGrid(c1), Grid::ContinuousGrid(c2)) => c1.merge(c2),
             (Grid::DiscreteGrid(d1), Grid::DiscreteGrid(d2)) => d1.merge(d2),
-            _ => panic!("Cannot merge grids that have a different shape."),
+            _ => Err("Cannot merge grids that have a different shape.".to_owned()),
         }
     }
 
@@ -293,29 +293,32 @@ impl DiscreteDimension {
         unreachable!("Could not sample discrete dimension: {:?}", self.cdf);
     }
 
-    fn add_training_sample(&mut self, sample: usize, weight: f64, fx: f64) {
+    fn add_training_sample(&mut self, sample: usize, weight: f64, fx: f64) -> Result<(), String> {
         if sample >= self.cdf.len() {
-            panic!(
+            return Err(format!(
                 "Sample outside of range: sample={}, range=[0,{})",
                 sample,
                 self.cdf.len()
-            );
+            ));
         }
 
         self.bin_accumulator[sample].add_sample(
             weight * fx,
             Some(&Sample::DiscreteGrid(weight, smallvec![sample], None)),
         );
+        Ok(())
     }
 
-    pub fn merge(&mut self, other: &DiscreteDimension) {
+    pub fn merge(&mut self, other: &DiscreteDimension) -> Result<(), String> {
         if self.cdf != other.cdf {
-            panic!("CDF not equivalent");
+            return Err("CDF not equivalent".to_owned());
         }
 
         for (bi, obi) in self.bin_accumulator.iter_mut().zip(&other.bin_accumulator) {
             bi.merge_samples_no_reset(obi);
         }
+
+        Ok(())
     }
 
     fn update<'a>(&mut self, alpha: f64, train_on_avg: bool) {
@@ -422,7 +425,7 @@ impl DiscreteGrid {
         max_prob_ratio: f64,
     ) -> DiscreteGrid {
         if values_per_dim.len() > 1 {
-            panic!("Factorized discrete dimensions are not supported yet.");
+            unimplemented!("Factorized discrete dimensions are not supported yet.");
         }
 
         DiscreteGrid {
@@ -450,7 +453,7 @@ impl DiscreteGrid {
                 *vs = v;
 
                 if self.discrete_dimensions.len() > 1 {
-                    panic!("Indexing not generic yet");
+                    unimplemented!("Indexing not generic yet");
                 }
 
                 child_index += v; // (v as f64 * d.cdf.len() as f64) as usize;
@@ -477,12 +480,12 @@ impl DiscreteGrid {
         }
     }
 
-    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64) {
+    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64) -> Result<(), String> {
         if !fx.is_finite() {
-            panic!(
+            return Err(format!(
                 "Added training sample that is not finite: sample={:?}, fx={}",
                 sample, fx
-            );
+            ));
         }
 
         if let Sample::DiscreteGrid(weight, xs, sub_sample) = sample {
@@ -494,24 +497,25 @@ impl DiscreteGrid {
                 // we normalize the samples per option of the discrete dimension with a counter per option,
                 // so we remove the pdf from the sample weight (as pdf * grid_sample_count = option_count )
                 // TODO: this weight is not correct for multiple dimensions in the discrete grid
-                d.add_training_sample(*sdim, sub_sample_weight, fx)
+                d.add_training_sample(*sdim, sub_sample_weight, fx)?
             }
 
             if let Some(s) = sub_sample {
-                self.child_grids[child_index].add_training_sample(&*s, fx);
+                self.child_grids[child_index].add_training_sample(&*s, fx)?;
             }
 
             self.accumulator.add_sample(fx * weight, Some(sample));
+            Ok(())
         } else {
             unreachable!("Sample cannot be converted to discrete sample: {:?}", self);
         }
     }
 
-    pub fn merge(&mut self, other: &DiscreteGrid) {
+    pub fn merge(&mut self, other: &DiscreteGrid) -> Result<(), String> {
         if self.discrete_dimensions.len() != other.discrete_dimensions.len()
             || self.child_grids.len() != other.child_grids.len()
         {
-            panic!("Dimensions do not match");
+            return Err("Discrete grid dimensions do not match".to_owned());
         }
 
         for (d, o) in self
@@ -519,14 +523,15 @@ impl DiscreteGrid {
             .iter_mut()
             .zip(&other.discrete_dimensions)
         {
-            d.merge(o);
+            d.merge(o)?;
         }
 
         for (c, o) in self.child_grids.iter_mut().zip(&other.child_grids) {
-            c.merge(o);
+            c.merge(o)?;
         }
 
         self.accumulator.merge_samples_no_reset(&other.accumulator);
+        Ok(())
     }
 
     pub fn update(&mut self, alpha: f64, new_bin_length: usize, train_on_avg: bool) {
@@ -581,20 +586,21 @@ impl ContinuousGrid {
         }
     }
 
-    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64) {
+    pub fn add_training_sample(&mut self, sample: &Sample, fx: f64) -> Result<(), String> {
         if !fx.is_finite() {
-            panic!(
+            return Err(format!(
                 "Added training sample that is not finite: sample={:?}, fx={}",
                 sample, fx
-            );
+            ));
         }
 
         if let Sample::ContinuousGrid(weight, xs) = sample {
             self.accumulator.add_sample(fx * weight, Some(sample));
 
             for (d, sdim) in self.continuous_dimensions.iter_mut().zip(xs) {
-                d.add_training_sample(*sdim, *weight, fx);
+                d.add_training_sample(*sdim, *weight, fx)?;
             }
+            Ok(())
         } else {
             unreachable!(
                 "Sample cannot be converted to continuous sample: {:?}",
@@ -603,9 +609,9 @@ impl ContinuousGrid {
         }
     }
 
-    pub fn merge(&mut self, grid: &ContinuousGrid) {
+    pub fn merge(&mut self, grid: &ContinuousGrid) -> Result<(), String> {
         if self.continuous_dimensions.len() != grid.continuous_dimensions.len() {
-            panic!("Cannot merge grids that have a different shape.");
+            return Err("Cannot merge grids that have a different shape.".to_owned());
         }
 
         self.accumulator.merge_samples_no_reset(&grid.accumulator);
@@ -615,8 +621,9 @@ impl ContinuousGrid {
             .iter_mut()
             .zip(&grid.continuous_dimensions)
         {
-            c.merge(o);
+            c.merge(o)?;
         }
+        Ok(())
     }
 
     pub fn update(&mut self, alpha: f64, new_bin_length: usize, train_on_avg: bool) {
@@ -670,12 +677,12 @@ impl ContinuousDimension {
         (sample, weight)
     }
 
-    fn add_training_sample(&mut self, sample: f64, weight: f64, fx: f64) {
+    fn add_training_sample(&mut self, sample: f64, weight: f64, fx: f64) -> Result<(), String> {
         if sample < 0. || sample > 1. || !fx.is_finite() || !weight.is_finite() {
-            panic!(
+            return Err(format!(
                 "Malformed sample point: sample={}, weight={}, fx={}",
                 sample, weight, fx
-            );
+            ));
         }
 
         let mut index = self
@@ -687,16 +694,18 @@ impl ContinuousDimension {
         }
 
         self.bin_accumulator[index].add_sample(weight * fx, None);
+        Ok(())
     }
 
-    fn merge(&mut self, other: &ContinuousDimension) {
+    fn merge(&mut self, other: &ContinuousDimension) -> Result<(), String> {
         if self.partitioning != other.partitioning {
-            panic!("Partitions do not match");
+            return Err("Partitions do not match".to_owned());
         }
 
         for (bi, obi) in self.bin_accumulator.iter_mut().zip(&other.bin_accumulator) {
             bi.merge_samples_no_reset(obi);
         }
+        Ok(())
     }
 
     fn update<'a>(&mut self, alpha: f64, new_bin_length: usize, train_on_avg: bool) {

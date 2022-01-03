@@ -4,7 +4,7 @@ description = "A Monte Carlo integrator that can handle nested discrete and cont
 edition = "2018"
 name = "havana"
 repository = "https://github.com/benruijl/havana"
-version = "0.1.5"
+version = "0.1.6"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

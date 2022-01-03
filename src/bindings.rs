@@ -200,15 +200,18 @@ impl HavanaWrapper {
         }
 
         for (s, f) in self.samples.iter().zip(&fx) {
-            self.grid.add_training_sample(s, *f);
+            self.grid
+                .add_training_sample(s, *f)
+                .map_err(|e| pyo3::exceptions::PyAssertionError::new_err(e))?;
         }
 
         Ok(())
     }
 
     fn merge(&mut self, other: &HavanaWrapper) -> PyResult<()> {
-        self.grid.merge(&other.grid);
-        Ok(())
+        self.grid
+            .merge(&other.grid)
+            .map_err(|e| pyo3::exceptions::PyAssertionError::new_err(e))
     }
 
     fn update(
