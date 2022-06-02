@@ -340,8 +340,17 @@ impl DiscreteDimension {
     }
 
     fn update<'a>(&mut self, alpha: f64, train_on_avg: bool) {
+        let mut num_samples_last_round = 0;
+        let mut total_sample_sum = 0;
+        let mut err_sum = 0.;
         for acc in &mut self.bin_accumulator {
+            num_samples_last_round += acc.new_samples;
             acc.update_iter();
+
+            if acc.processed_samples > 1 {
+                total_sample_sum += acc.processed_samples - 1;
+                err_sum += acc.err * ((acc.processed_samples - 1) as f64).sqrt();
+            }
         }
 
         if alpha == 0.
@@ -349,7 +358,7 @@ impl DiscreteDimension {
                 if train_on_avg {
                     x.avg == 0.
                 } else {
-                    x.err == 0.
+                    x.err == 0. || x.processed_samples < 2
                 }
             })
         {
@@ -361,7 +370,19 @@ impl DiscreteDimension {
             if train_on_avg {
                 *c = acc.avg.abs()
             } else {
-                *c = acc.err;
+                if acc.processed_samples < 2 {
+                    *c = 0.;
+                } else {
+                    let n_samples = (acc.processed_samples - 1) as f64;
+                    let var = acc.err * n_samples.sqrt();
+                    *c = var;
+
+                    // add the contribution that minimizes the variance of the sum of bins when doing `num_samples_last_round`
+                    // more samples
+                    *c += (n_samples * (err_sum - var)
+                        - var * (total_sample_sum as f64 - n_samples))
+                        / (num_samples_last_round as f64)
+                }
             }
 
             if *c > max_per_bin {
@@ -375,7 +396,6 @@ impl DiscreteDimension {
             sum += *pdf;
         }
 
-        // TODO: use alpha to adjust updating speed of the cdf
         let mut last = 0.;
         for c in self.cdf.iter_mut() {
             *c = *c / sum + last;
