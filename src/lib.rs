@@ -376,12 +376,6 @@ impl DiscreteDimension {
                     let n_samples = (acc.processed_samples - 1) as f64;
                     let var = acc.err * n_samples.sqrt();
                     *c = var;
-
-                    // add the contribution that minimizes the variance of the sum of bins when doing `num_samples_last_round`
-                    // more samples
-                    *c += (n_samples * (err_sum - var)
-                        - var * (total_sample_sum as f64 - n_samples))
-                        / (num_samples_last_round as f64)
                 }
             }
 
